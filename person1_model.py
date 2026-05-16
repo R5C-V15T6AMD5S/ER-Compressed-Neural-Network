@@ -18,7 +18,6 @@ All operations are implemented manually — no PyTorch, no TensorFlow.
 """
 
 import numpy as np
-import random
 
 # ─── ACTIVATION FUNCTIONS ────────────────────────────────────────────────────
 
