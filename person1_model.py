@@ -424,9 +424,11 @@ class SimpleCNN:
     """
 
     def __init__(self, num_classes=131, input_size=100, dropout_p=0.5):
-        # Calculate feature map size after 3 MaxPool layers
-        # Input: 100 → after 1st pool: 50 → after 2nd: 25 → after 3rd: 12
-        fc_input_size = 32 * 12 * 12  # 32 channels * 12 * 12 = 4608
+        # Calculate feature map size after 3 MaxPool layers dynamically
+        s = input_size
+        for _ in range(3):
+            s = s // 2
+        fc_input_size = 32 * s * s
         
         # Build layers in order
         self.layers = []
@@ -468,22 +470,23 @@ class SimpleCNN:
         # Store input size for inference time measurement
         self.input_size = input_size
 
-    def forward(self, x, training=True):
+    def forward(self, x, training=None):
         """
         Full forward pass.
         x: (batch, 3, 100, 100) — pixel values normalised to [0, 1]
         training: whether to use training mode (enables dropout and BN statistics)
         Returns: (batch, num_classes) probabilities
         """
+        if training is None:
+            training = self.training
         out = x
         for i, layer in enumerate(self.layers):
-            if isinstance(layer, (BatchNormLayer, DropoutLayer)):
-                out = layer.forward(out, training=training)
-            else:
-                out = layer.forward(out)
+            out = layer.forward(out)        # layer runs first
+            if i in self._relu_after:       # THEN relu check
+                out = relu(out)
             
             if i in self._relu_after:
-                self._relu_cache[i] = out.copy()
+                self._relu_cache[i] = out
                 out = relu(out)
         
         # Final softmax
@@ -505,7 +508,7 @@ class SimpleCNN:
         """Returns only layers that have trainable parameters."""
         trainable = []
         for layer in self.layers:
-            if isinstance(layer, (ConvLayer, FCLayer, BatchNormLayer)):
+            if isinstance(layer, (ConvLayer, FCLayer)):
                 trainable.append(layer)
         return trainable
 
