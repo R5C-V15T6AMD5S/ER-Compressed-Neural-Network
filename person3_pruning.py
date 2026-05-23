@@ -18,6 +18,7 @@ import os
 import argparse
 import numpy as np
 
+from logger import Logger
 from person1_model import SimpleCNN, ConvLayer, FCLayer
 from person2_train import (load_dataset, get_batches, cross_entropy_loss,
                             SGDMomentum, compute_accuracy, save_model, load_model)
@@ -29,7 +30,6 @@ def get_all_weights(model):
     """
     Collect all weight values (flattened) from all trainable layers.
     Used to find the global pruning threshold.
-    Returns a single 1D array of all weight magnitudes.
     """
     all_weights = []
     for layer in model.get_trainable_layers():
@@ -55,25 +55,14 @@ def count_sparsity(model):
 def global_pruning(model, amount):
     """
     Global unstructured L1 pruning.
-
-    Steps:
-    1. Collect ALL weights across all layers into one array
-    2. Find the threshold = amount-th percentile of absolute values
-    3. Zero out any weight whose |value| < threshold
-
-    This matches the approach from Han et al. described in the survey —
-    removing globally unimportant connections regardless of which layer
-    they belong to.
-
+    Zeroes out weights whose |value| is below the global percentile threshold.
     amount: fraction of total weights to prune (e.g. 0.5 = 50%)
     """
-    # Step 1: Find global threshold
     all_magnitudes = get_all_weights(model)
     threshold = np.percentile(all_magnitudes, amount * 100)
     print(f"  [Global Pruning] Threshold: {threshold:.6f} "
           f"(pruning weights with |w| < threshold)")
 
-    # Step 2: Apply mask — zero out weights below threshold
     total_pruned = 0
     for layer in model.get_trainable_layers():
         if hasattr(layer, 'filters'):
@@ -94,12 +83,7 @@ def global_pruning(model, amount):
 def per_layer_pruning(model, amount):
     """
     Per-layer unstructured L1 pruning.
-
-    Prunes 'amount' fraction of the lowest-magnitude weights within
-    each layer independently. This gives more control than global pruning
-    but may over-prune small layers.
-
-    amount: fraction of weights to prune per layer (e.g. 0.4 = 40%)
+    Prunes 'amount' fraction within each layer independently.
     """
     print(f"  [Per-Layer Pruning] Pruning {amount*100:.0f}% of each layer...")
     for i, layer in enumerate(model.get_trainable_layers()):
@@ -131,13 +115,10 @@ def fine_tune(model, X_train, y_train, X_test, y_test,
               epochs, lr, batch_size):
     """
     Fine-tune the pruned model to recover lost accuracy.
-    Uses a lower learning rate than initial training.
-    Crucially: after each gradient update, re-zeroes the pruned weights
-    so that pruned connections stay pruned (frozen mask).
+    Re-zeroes pruned weights after each update to keep the mask frozen.
     """
     print(f"\n  [Fine-tuning] {epochs} epoch(s) at lr={lr}...")
 
-    # Record which weights are zero — these stay zero (the pruning mask)
     masks = {}
     for i, layer in enumerate(model.get_trainable_layers()):
         if hasattr(layer, 'filters'):
@@ -159,7 +140,6 @@ def fine_tune(model, X_train, y_train, X_test, y_test,
             model.backward(d_probs)
             optimizer.step(model)
 
-            # Re-apply pruning mask — keep zeroed weights at zero
             for j, layer in enumerate(model.get_trainable_layers()):
                 if hasattr(layer, 'filters'):
                     layer.filters *= masks[j]
@@ -174,9 +154,9 @@ def fine_tune(model, X_train, y_train, X_test, y_test,
     return model
 
 
-# ─── MODEL SIZE ───────────────────────────────────────────────────────────────
+# ─── MODEL SIZE / INFERENCE ───────────────────────────────────────────────────
 
-def get_model_size_kb(model, path="tmp_model"):
+def get_model_size_kb(model, path="models/tmp_model"):
     """Save model and return file size in KB."""
     save_model(model, path)
     size = os.path.getsize(path + ".npz") / 1024
@@ -188,7 +168,7 @@ def measure_inference_ms(model, runs=100, batch_size=1, img_size=100):
     """Average inference time in ms over multiple runs."""
     import time
     dummy = np.random.randn(batch_size, 3, img_size, img_size).astype(np.float32)
-    for _ in range(5):  # warm up
+    for _ in range(5):
         model.forward(dummy)
     start = time.time()
     for _ in range(runs):
@@ -198,26 +178,46 @@ def measure_inference_ms(model, runs=100, batch_size=1, img_size=100):
 
 # ─── COMPARISON TABLE ────────────────────────────────────────────────────────
 
-def print_comparison(orig, comp, strategy, amount):
-    print("\n" + "=" * 57)
-    print(f"  COMPARISON: Original vs Pruning ({strategy}, {amount*100:.0f}%)")
-    print("=" * 57)
-    print(f"{'Metric':<24} {'Original':>14} {'Pruned':>14}")
-    print("-" * 57)
-    print(f"{'Accuracy (%)':<24} {orig['acc']:>13.2f}% {comp['acc']:>13.2f}%")
-    print(f"{'Model Size (KB)':<24} {orig['size']:>14.1f} {comp['size']:>14.1f}")
-    print(f"{'Inference (ms)':<24} {orig['inf']:>14.2f} {comp['inf']:>14.2f}")
-    print(f"{'Sparsity':<24} {'0.0%':>14} {comp['sparsity']:>13.1f}%")
-    print("-" * 57)
-    print(f"{'Accuracy Drop':<24} {orig['acc'] - comp['acc']:>13.2f}%")
-    print(f"{'Speedup':<24} {orig['inf'] / comp['inf']:>13.2f}x")
-    print("=" * 57 + "\n")
+def print_comparison(orig, comp, strategy, amount, log):
+    log("")
+    log("=" * 57)
+    log(f"  COMPARISON: Original vs Pruning ({strategy}, {amount*100:.0f}%)")
+    log("=" * 57)
+    log(f"{'Metric':<24} {'Original':>14} {'Pruned':>14}")
+    log("-" * 57)
+    log(f"{'Accuracy (%)':<24} {orig['acc']:>13.2f}% {comp['acc']:>13.2f}%")
+    log(f"{'Model Size (KB)':<24} {orig['size']:>14.1f} {comp['size']:>14.1f}")
+    log(f"{'Inference (ms)':<24} {orig['inf']:>14.2f} {comp['inf']:>14.2f}")
+    log(f"{'Sparsity':<24} {'0.0%':>14} {comp['sparsity']:>13.1f}%")
+    log("-" * 57)
+    log(f"{'Accuracy Drop':<24} {orig['acc'] - comp['acc']:>13.2f}%")
+    log(f"{'Speedup':<24} {orig['inf'] / comp['inf']:>13.2f}x")
+    log("=" * 57)
+    log("")
 
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
 def main(args):
-    # ── Load data ─────────────────────────────────────────────────────────────
+    log = Logger("person3")
+
+    # Check model file exists before doing anything
+    model_path = args.model_path if args.model_path.endswith(".npz")                  else args.model_path + ".npz"
+    if not os.path.exists(model_path):
+        log("=" * 57)
+        log("  ERROR — No trained model found!")
+        log("=" * 57)
+        log(f"  Expected file: {model_path}")
+        log("")
+        log("  Person 3 needs a trained model from Person 2 first.")
+        log("  Run this command to train one:")
+        log("")
+        log(f"    python person2_train.py --data_dir {args.data_dir} --epochs 3 --max_per_class 50")
+        log("")
+        log("  Then re-run person3_pruning.py.")
+        log.close()
+        return
+
     X_train, y_train, classes = load_dataset(
         args.data_dir, "Training", max_per_class=args.max_per_class
     )
@@ -226,25 +226,23 @@ def main(args):
     )
     num_classes = len(classes)
 
-    # ── Load trained model ────────────────────────────────────────────────────
-    print(f"\n[Model] Loading from '{args.model_path}'...")
+    log(f"[Model] Loading from '{args.model_path}'...")
     model = SimpleCNN(num_classes=num_classes)
     model = load_model(model, args.model_path)
 
-    # ── Baseline stats ────────────────────────────────────────────────────────
-    print("\n[Baseline] Evaluating original model...")
+    log.section("BASELINE")
     orig_acc  = compute_accuracy(model, X_test, y_test, args.batch_size)
     orig_size = get_model_size_kb(model)
     orig_inf  = measure_inference_ms(model)
-    print(f"  Accuracy : {orig_acc:.2f}%")
-    print(f"  Size     : {orig_size:.1f} KB")
-    print(f"  Inference: {orig_inf:.2f} ms")
+    log(f"  Accuracy : {orig_acc:.2f}%")
+    log(f"  Size     : {orig_size:.1f} KB")
+    log(f"  Inference: {orig_inf:.2f} ms")
 
     original_stats = {"acc": orig_acc, "size": orig_size,
                       "inf": orig_inf, "sparsity": 0.0}
 
-    # ── Apply pruning ─────────────────────────────────────────────────────────
-    print(f"\n[Pruning] Strategy: '{args.strategy}' | Amount: {args.amount*100:.0f}%")
+    log.section("PRUNING")
+    log(f"[Pruning] Strategy: '{args.strategy}' | Amount: {args.amount*100:.0f}%")
     if args.strategy == "global":
         model = global_pruning(model, args.amount)
     elif args.strategy == "per_layer":
@@ -252,18 +250,15 @@ def main(args):
     else:
         raise ValueError(f"Unknown strategy '{args.strategy}'. Use 'global' or 'per_layer'.")
 
-    # Accuracy immediately after pruning (before fine-tuning)
     acc_after_prune = compute_accuracy(model, X_test, y_test, args.batch_size)
-    print(f"\n  Accuracy after pruning (before fine-tune): {acc_after_prune:.2f}%")
+    log(f"  Accuracy after pruning (before fine-tune): {acc_after_prune:.2f}%")
 
-    # ── Fine-tune ─────────────────────────────────────────────────────────────
     model = fine_tune(model, X_train, y_train, X_test, y_test,
                       epochs=args.finetune_epochs,
                       lr=args.finetune_lr,
                       batch_size=args.batch_size)
 
-    # ── Pruned model stats ────────────────────────────────────────────────────
-    print("\n[Evaluation] Final pruned model stats...")
+    log.section("RESULTS")
     pruned_acc      = compute_accuracy(model, X_test, y_test, args.batch_size)
     pruned_size     = get_model_size_kb(model)
     pruned_inf      = measure_inference_ms(model)
@@ -272,21 +267,21 @@ def main(args):
     pruned_stats = {"acc": pruned_acc, "size": pruned_size,
                     "inf": pruned_inf, "sparsity": pruned_sparsity}
 
+    os.makedirs(os.path.dirname(args.save_path) or "models", exist_ok=True)
     save_model(model, args.save_path)
 
-    # ── Comparison ────────────────────────────────────────────────────────────
-    print_comparison(original_stats, pruned_stats, args.strategy, args.amount)
+    print_comparison(original_stats, pruned_stats, args.strategy, args.amount, log)
+    log.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prune SimpleCNN (from scratch)")
     parser.add_argument("--data_dir",        type=str,   default="./fruits-360")
-    parser.add_argument("--model_path",      type=str,   default="cnn_fruits")
-    parser.add_argument("--save_path",       type=str,   default="cnn_pruned")
+    parser.add_argument("--model_path",      type=str,   default="models/cnn_fruits")
+    parser.add_argument("--save_path",       type=str,   default="models/cnn_pruned")
     parser.add_argument("--strategy",        type=str,   default="global",
                         choices=["global", "per_layer"])
-    parser.add_argument("--amount",          type=float, default=0.5,
-                        help="Fraction of weights to prune (default: 0.5 = 50%%)")
+    parser.add_argument("--amount",          type=float, default=0.5)
     parser.add_argument("--finetune_epochs", type=int,   default=3)
     parser.add_argument("--finetune_lr",     type=float, default=0.001)
     parser.add_argument("--batch_size",      type=int,   default=32)

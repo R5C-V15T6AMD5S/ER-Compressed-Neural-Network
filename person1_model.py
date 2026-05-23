@@ -1,316 +1,151 @@
 """
-person1_model.py — Custom CNN architecture built from scratch using NumPy only.
+person1_model.py — CNN architecture built from scratch using only NumPy.
 PERSON 1's responsibility.
 
-Architecture (Improved Baseline):
-    Input (3x100x100)
-        → Conv1 (8 filters, 3x3)  + BN + ReLU
-        → MaxPool (2x2)
-        → Conv2 (16 filters, 3x3) + BN + ReLU
-        → MaxPool (2x2)
-        → Conv3 (32 filters, 3x3) + BN + ReLU
-        → MaxPool (2x2)
-        → Flatten
-        → FC1 (256 neurons)       + BN + ReLU + Dropout
-        → FC2 (num_classes)       + Softmax
+Defines the full SimpleCNN used by all other parts of the project:
+    - ConvLayer     : 2D convolution + bias, stores gradients d_filters / d_biases
+    - ReLULayer     : element-wise ReLU activation
+    - MaxPoolLayer  : 2×2 max-pooling with stride 2
+    - FCLayer       : fully-connected (dense) layer, stores gradients d_weights / d_biases
+    - SoftmaxLayer  : softmax over class logits (forward only — gradient handled externally)
+    - SimpleCNN     : assembles the above into a complete model
 
-All operations are implemented manually — no PyTorch, no TensorFlow.
+Architecture:
+    Input  : (N, 3, 100, 100)   — RGB 100×100 images
+    Conv1  : 8 filters, 3×3, pad=1  → (N,  8, 100, 100)
+    ReLU1
+    Pool1  : 2×2, stride 2          → (N,  8,  50,  50)
+    Conv2  : 16 filters, 3×3, pad=1 → (N, 16,  50,  50)
+    ReLU2
+    Pool2  : 2×2, stride 2          → (N, 16,  25,  25)
+    Flatten                          → (N, 16*25*25) = (N, 10000)
+    FC1    : 10000 → 128
+    ReLU3
+    FC2    : 128   → num_classes
+    Softmax
+
+All layers implement:
+    forward(x)  → output
+    backward(d) → gradient w.r.t. input
+
+ConvLayer and FCLayer also expose:
+    .filters / .weights   — learnable parameters
+    .biases
+    .d_filters / .d_weights  — gradients (set during backward)
+    .d_biases
+
+Usage:
+    from person1_model import SimpleCNN, ConvLayer, FCLayer
+    model = SimpleCNN(num_classes=20)
+    probs = model.forward(X_batch)   # (N, num_classes)
+    model.backward(d_probs)
 """
 
 import numpy as np
 
 
-# ─── ACTIVATION FUNCTIONS ────────────────────────────────────────────────────
-
-def relu(x):
-    """ReLU activation: max(0, x)"""
-    return np.maximum(0, x)
-
-def relu_derivative(x):
-    """Derivative of ReLU — 1 where x > 0, else 0."""
-    return (x > 0).astype(float)
-
-def softmax(x):
-    """
-    Numerically stable softmax over last axis.
-    Subtracts max to prevent overflow.
-    """
-    e = np.exp(x - np.max(x, axis=-1, keepdims=True))
-    return e / np.sum(e, axis=-1, keepdims=True)
-
-
-# ─── BATCH NORMALIZATION LAYER ────────────────────────────────────────────────
-
-class BatchNormLayer:
-    """
-    Batch Normalization layer implemented from scratch.
-    
-    Normalizes activations to have zero mean and unit variance,
-    then applies learnable scale (gamma) and shift (beta).
-    
-    This is a standard component in modern CNNs that helps with:
-    - Faster convergence
-    - Better gradient flow
-    - Reduced sensitivity to initialization
-    """
-    
-    def __init__(self, num_features, momentum=0.9, eps=1e-5):
-        self.num_features = num_features
-        self.momentum = momentum
-        self.eps = eps
-        
-        # Learnable parameters
-        self.gamma = np.ones(num_features)
-        self.beta = np.zeros(num_features)
-        
-        # Running statistics for inference
-        self.running_mean = np.zeros(num_features)
-        self.running_var = np.ones(num_features)
-        
-        # Cache for backward pass
-        self.last_input = None
-        self.last_normalized = None
-        self.last_mean = None
-        self.last_var = None
-        
-        # Gradients
-        self.d_gamma = np.zeros_like(self.gamma)
-        self.d_beta = np.zeros_like(self.beta)
-        
-        self.training = True
-    
-    def forward(self, x, training=True):
-        """
-        x shape: (batch, channels, H, W) for conv layers OR
-                 (batch, features) for FC layers
-        Returns normalized output with same shape.
-        """
-        self.training = training
-        self.last_input = x
-        
-        # Flatten spatial dimensions for conv layers to treat each channel separately
-        if len(x.shape) == 4:  # Conv layer output (N, C, H, W)
-            N, C, H, W = x.shape
-            x_flat = x.transpose(0, 2, 3, 1).reshape(-1, C)
-            spatial_shape = (N, H, W)
-        else:  # FC layer output (N, features)
-            x_flat = x
-            C = self.num_features
-            spatial_shape = None
-        
-        if training:
-            # Compute mean and variance
-            mean = np.mean(x_flat, axis=0)
-            var = np.var(x_flat, axis=0)
-            
-            # Update running statistics
-            self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
-            self.running_var = self.momentum * self.running_var + (1 - self.momentum) * var
-            
-            self.last_mean = mean
-            self.last_var = var
-        else:
-            mean = self.running_mean
-            var = self.running_var
-        
-        # Normalize
-        x_normalized = (x_flat - mean) / np.sqrt(var + self.eps)
-        self.last_normalized = x_normalized
-        
-        # Scale and shift
-        out = self.gamma * x_normalized + self.beta
-        
-        # Reshape back if needed
-        if spatial_shape is not None:
-            N, H, W = spatial_shape
-            out = out.reshape(N, H, W, C).transpose(0, 3, 1, 2)
-        
-        return out
-    
-    def backward(self, d_out):
-        """
-        Backward pass for Batch Normalization.
-        d_out shape matches input x shape.
-        """
-        if len(d_out.shape) == 4:
-            N, C, H, W = d_out.shape
-            d_out_flat = d_out.transpose(0, 2, 3, 1).reshape(-1, C)
-            x_flat = self.last_input.transpose(0, 2, 3, 1).reshape(-1, C)
-            N_total = N * H * W
-        else:
-            d_out_flat = d_out
-            x_flat = self.last_input
-            N_total = len(x_flat)
-        
-        # Gradients for gamma and beta
-        self.d_gamma = np.sum(d_out_flat * self.last_normalized, axis=0)
-        self.d_beta = np.sum(d_out_flat, axis=0)
-        
-        # Gradient through the normalized input
-        d_normalized = d_out_flat * self.gamma
-        
-        # Gradient through mean and variance
-        var_inv = 1.0 / np.sqrt(self.last_var + self.eps)
-        
-        d_var = np.sum(d_normalized * (x_flat - self.last_mean), axis=0) * -0.5 * var_inv**3
-        d_mean = np.sum(d_normalized * -var_inv, axis=0) + d_var * np.mean(-2.0 * (x_flat - self.last_mean), axis=0)
-        
-        # Gradient through input
-        d_x = d_normalized * var_inv + d_var * (2.0 * (x_flat - self.last_mean) / N_total) + d_mean / N_total
-        
-        # Reshape back if needed
-        if len(d_out.shape) == 4:
-            d_x = d_x.reshape(N, H, W, C).transpose(0, 3, 1, 2)
-        
-        return d_x
-
-
-# ─── DROPOUT LAYER ───────────────────────────────────────────────────────────
-
-class DropoutLayer:
-    """
-    Dropout layer for regularization.
-    Randomly zeros out a fraction of activations during training.
-    """
-    
-    def __init__(self, p=0.5):
-        self.p = p  # Dropout probability
-        self.mask = None
-        self.training = True
-    
-    def forward(self, x, training=True):
-        self.training = training
-        
-        if training and self.p > 0:
-            self.mask = (np.random.rand(*x.shape) > self.p).astype(float)
-            # Scale by 1/(1-p) to maintain expected sum
-            return x * self.mask / (1 - self.p)
-        return x
-    
-    def backward(self, d_out):
-        if self.training and self.p > 0:
-            return d_out * self.mask / (1 - self.p)
-        return d_out
-
-
-# ─── CONVOLUTION LAYER ────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  LAYER IMPLEMENTATIONS
+# ══════════════════════════════════════════════════════════════════════════════
 
 class ConvLayer:
     """
-    2D Convolutional layer with 'same' padding.
-    
-    Attributes:
-        filters  : (num_filters, in_channels, kH, kW)
-        biases   : (num_filters,)
+    2D Convolutional layer — pure NumPy.
+
+    Parameters
+    ----------
+    in_channels  : number of input feature maps
+    out_channels : number of filters (output feature maps)
+    kernel_size  : square kernel side length (default 3)
+    padding      : zero-padding added to each spatial side (default 1)
+                   padding=1 with kernel_size=3 keeps spatial size unchanged.
+
+    Attributes set after forward()
+    --------------------------------
+    d_filters, d_biases : gradients ready for the optimizer
     """
 
-    def __init__(self, in_channels, num_filters, kernel_size=3, stride=1, padding='same'):
-        self.num_filters = num_filters
-        self.in_channels = in_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding if padding != 'same' else kernel_size // 2
-        
-        # He initialization — good default for ReLU networks
-        # Improved: use 2.0 factor and consider kernel size properly
-        fan_in = in_channels * kernel_size * kernel_size
-        scale = np.sqrt(2.0 / fan_in)
-        self.filters = np.random.randn(
-            num_filters, in_channels, kernel_size, kernel_size
-        ) * scale
-        self.biases = np.zeros(num_filters)
-        
-        # For BatchNorm integration: store output channel dimension
-        self.out_channels = num_filters
-        
-        # Cached values needed for backprop
-        self.last_input = None
-        self.last_output = None
-        
-        # Gradients
-        self.d_filters = np.zeros_like(self.filters)
-        self.d_biases = np.zeros_like(self.biases)
-        
-        # Padding amount
-        self.pad_amount = self.padding if self.padding != 'same' else kernel_size // 2
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1):
+        self.in_channels  = in_channels
+        self.out_channels = out_channels
+        self.kernel_size  = kernel_size
+        self.padding      = padding
 
-    def _pad(self, x):
-        """Apply zero-padding to spatial dimensions."""
-        if self.pad_amount == 0:
-            return x
-        return np.pad(x, ((0, 0), (0, 0), 
-                          (self.pad_amount, self.pad_amount),
-                          (self.pad_amount, self.pad_amount)), 
-                      mode='constant')
+        # He initialisation — good default for ReLU networks
+        fan_in = in_channels * kernel_size * kernel_size
+        self.filters = np.random.randn(
+            out_channels, in_channels, kernel_size, kernel_size
+        ).astype(np.float32) * np.sqrt(2.0 / fan_in)
+
+        self.biases = np.zeros(out_channels, dtype=np.float32)
+
+        # Gradient placeholders (set during backward)
+        self.d_filters = np.zeros_like(self.filters)
+        self.d_biases  = np.zeros_like(self.biases)
 
     def forward(self, x):
         """
-        x shape: (batch, in_channels, H, W)
-        Returns: (batch, num_filters, out_H, out_W)
+        x : (N, C_in, H, W)
+        returns : (N, C_out, H_out, W_out)
         """
-        self.last_input = x
-        x_pad = self._pad(x)
+        self._x = x
+        N, C, H, W = x.shape
+        F, _, kH, kW = self.filters.shape
+        p = self.padding
 
-        batch, _, H, W = x_pad.shape
-        kH = kW = self.kernel_size
-        out_H = (H - kH) // self.stride + 1
-        out_W = (W - kW) // self.stride + 1
-        
-        # Pre-allocate output for better performance
-        out = np.zeros((batch, self.num_filters, out_H, out_W))
+        H_out = H + 2 * p - kH + 1
+        W_out = W + 2 * p - kW + 1
 
-        for f in range(self.num_filters):
-            for i in range(out_H):
-                for j in range(out_W):
-                    si = i * self.stride
-                    sj = j * self.stride
-                    patch = x_pad[:, :, si:si+kH, sj:sj+kW]
-                    out[:, f, i, j] = (
-                        np.sum(patch * self.filters[f], axis=(1, 2, 3))
-                        + self.biases[f]
-                    )
+        # Zero-pad input
+        x_pad = np.pad(x, ((0,0),(0,0),(p,p),(p,p)), mode='constant')
+        self._x_pad = x_pad
 
-        self.last_output = out
+        out = np.zeros((N, F, H_out, W_out), dtype=np.float32)
+
+        # Use im2col-style vectorised approach for speed
+        for i in range(H_out):
+            for j in range(W_out):
+                patch = x_pad[:, :, i:i+kH, j:j+kW]          # (N, C, kH, kW)
+                patch_flat = patch.reshape(N, -1)              # (N, C*kH*kW)
+                filt_flat  = self.filters.reshape(F, -1).T     # (C*kH*kW, F)
+                out[:, :, i, j] = patch_flat @ filt_flat + self.biases  # (N, F)
+
         return out
 
     def backward(self, d_out):
         """
-        d_out shape: (batch, num_filters, out_H, out_W)
-        Returns d_input: (batch, in_channels, H, W)
+        d_out : gradient from the layer above, shape (N, F, H_out, W_out)
+        returns: gradient w.r.t. input x, shape (N, C, H, W)
         """
-        x = self.last_input
-        x_pad = self._pad(x)
+        x_pad = self._x_pad
+        N, F, H_out, W_out = d_out.shape
+        _, C, kH, kW = self.filters.shape
+        p = self.padding
 
-        batch, _, H_pad, W_pad = x_pad.shape
-        kH = kW = self.kernel_size
-        _, _, out_H, out_W = d_out.shape
-
-        d_x_pad = np.zeros_like(x_pad)
         self.d_filters = np.zeros_like(self.filters)
-        self.d_biases = np.zeros_like(self.biases)
+        self.d_biases  = np.zeros_like(self.biases)
+        d_x_pad        = np.zeros_like(x_pad)
 
-        for f in range(self.num_filters):
-            self.d_biases[f] = np.sum(d_out[:, f, :, :])
-            for i in range(out_H):
-                for j in range(out_W):
-                    si = i * self.stride
-                    sj = j * self.stride
-                    patch = x_pad[:, :, si:si+kH, sj:sj+kW]
-                    
-                    # Gradient w.r.t. filter weights
-                    self.d_filters[f] += np.sum(
-                        patch * d_out[:, f, i, j][:, None, None, None],
-                        axis=0
-                    )
-                    
-                    # Gradient w.r.t. input
-                    d_x_pad[:, :, si:si+kH, sj:sj+kW] += (
-                        self.filters[f] * d_out[:, f, i, j][:, None, None, None]
-                    )
+        # Bias gradient: sum over N, H_out, W_out for each filter
+        self.d_biases = np.sum(d_out, axis=(0, 2, 3))
 
-        # Remove padding from gradient
-        if self.pad_amount > 0:
-            p = self.pad_amount
+        filt_flat = self.filters.reshape(F, -1)   # (F, C*kH*kW)
+
+        for i in range(H_out):
+            for j in range(W_out):
+                patch = x_pad[:, :, i:i+kH, j:j+kW]   # (N, C, kH, kW)
+                patch_flat = patch.reshape(N, -1)        # (N, C*kH*kW)
+                g = d_out[:, :, i, j]                   # (N, F)
+
+                # Filter gradient: sum over batch
+                self.d_filters += (g.T @ patch_flat).reshape(self.filters.shape)
+
+                # Input gradient
+                d_patch = (g @ filt_flat).reshape(N, C, kH, kW)  # (N,C,kH,kW)
+                d_x_pad[:, :, i:i+kH, j:j+kW] += d_patch
+
+        # Remove padding to recover gradient w.r.t. original x
+        if p > 0:
             d_x = d_x_pad[:, :, p:-p, p:-p]
         else:
             d_x = d_x_pad
@@ -318,217 +153,379 @@ class ConvLayer:
         return d_x
 
 
-# ─── MAX POOLING LAYER ────────────────────────────────────────────────────────
-
-class MaxPoolLayer:
-    """2x2 Max Pooling with stride 2."""
-
-    def __init__(self, pool_size=2):
-        self.pool_size = pool_size
-        self.last_input = None
-        self.last_mask = None
+class ReLULayer:
+    """
+    Element-wise ReLU: f(x) = max(0, x)
+    Gradient: 1 where x > 0, else 0.
+    """
 
     def forward(self, x):
-        """x: (batch, channels, H, W) → (batch, channels, H//2, W//2)"""
-        self.last_input = x
-        batch, C, H, W = x.shape
-        p = self.pool_size
-        out_H, out_W = H // p, W // p
+        self._mask = (x > 0)
+        return x * self._mask
 
-        out = np.zeros((batch, C, out_H, out_W))
-        mask = np.zeros_like(x, dtype=bool)
+    def backward(self, d_out):
+        return d_out * self._mask
 
-        for i in range(out_H):
-            for j in range(out_W):
-                patch = x[:, :, i*p:(i+1)*p, j*p:(j+1)*p]
-                max_vals = np.max(patch, axis=(2, 3), keepdims=True)
-                out[:, :, i, j] = max_vals[:, :, 0, 0]
-                mask[:, :, i*p:(i+1)*p, j*p:(j+1)*p] = (patch == max_vals)
 
-        self.last_mask = mask
+class MaxPoolLayer:
+    """
+    2×2 max-pooling with stride 2.
+    Halves both spatial dimensions.
+    During backward, gradient flows only to the max element in each window.
+    """
+
+    def __init__(self, pool_size=2, stride=2):
+        self.pool_size = pool_size
+        self.stride    = stride
+
+    def forward(self, x):
+        """x : (N, C, H, W)  →  (N, C, H//2, W//2)"""
+        self._x = x
+        N, C, H, W = x.shape
+        p, s = self.pool_size, self.stride
+        H_out = (H - p) // s + 1
+        W_out = (W - p) // s + 1
+
+        out = np.zeros((N, C, H_out, W_out), dtype=np.float32)
+
+        for i in range(H_out):
+            for j in range(W_out):
+                h_s, w_s = i * s, j * s
+                window = x[:, :, h_s:h_s+p, w_s:w_s+p]
+                out[:, :, i, j] = np.max(window, axis=(2, 3))
+
         return out
 
     def backward(self, d_out):
-        """Route gradient only through the max positions."""
-        batch, C, H, W = self.last_input.shape
-        p = self.pool_size
-        out_H, out_W = H // p, W // p
+        """Route gradient to the position of the max value."""
+        x = self._x
+        N, C, H, W = x.shape
+        p, s = self.pool_size, self.stride
+        H_out = (H - p) // s + 1
+        W_out = (W - p) // s + 1
 
-        d_x = np.zeros_like(self.last_input)
-        for i in range(out_H):
-            for j in range(out_W):
-                d_x[:, :, i*p:(i+1)*p, j*p:(j+1)*p] += (
-                    self.last_mask[:, :, i*p:(i+1)*p, j*p:(j+1)*p]
-                    * d_out[:, :, i, j][:, :, None, None]
+        d_x = np.zeros_like(x)
+
+        for i in range(H_out):
+            for j in range(W_out):
+                h_s, w_s = i * s, j * s
+                window = x[:, :, h_s:h_s+p, w_s:w_s+p]       # (N,C,p,p)
+                max_v  = np.max(window, axis=(2, 3), keepdims=True)
+                mask   = (window == max_v).astype(np.float32)
+                # Normalise in case of ties
+                mask  /= (np.sum(mask, axis=(2,3), keepdims=True) + 1e-8)
+                d_x[:, :, h_s:h_s+p, w_s:w_s+p] += (
+                    mask * d_out[:, :, i:i+1, j:j+1]
                 )
+
         return d_x
 
 
-# ─── FULLY CONNECTED LAYER ────────────────────────────────────────────────────
-
-class FCLayer:
-    """Standard fully-connected (dense) layer."""
-
-    def __init__(self, in_features, out_features):
-        scale = np.sqrt(2.0 / in_features)
-        self.weights = np.random.randn(in_features, out_features) * scale
-        self.biases = np.zeros(out_features)
-        
-        self.out_features = out_features  # For BatchNorm compatibility
-
-        self.last_input = None
-        self.d_weights = np.zeros_like(self.weights)
-        self.d_biases = np.zeros_like(self.biases)
-
-    def forward(self, x):
-        """x: (batch, in_features) → (batch, out_features)"""
-        self.last_input = x
-        return x @ self.weights + self.biases
-
-    def backward(self, d_out):
-        """d_out: (batch, out_features) → d_input: (batch, in_features)"""
-        self.d_weights = self.last_input.T @ d_out
-        self.d_biases = np.sum(d_out, axis=0)
-        return d_out @ self.weights.T
-
-
-# ─── FLATTEN LAYER ────────────────────────────────────────────────────────────
-
 class FlattenLayer:
-    """Flattens (batch, C, H, W) → (batch, C*H*W)."""
-
-    def __init__(self):
-        self.last_shape = None
+    """Reshape (N, C, H, W) → (N, C*H*W) on forward, reverse on backward."""
 
     def forward(self, x):
-        self.last_shape = x.shape
+        self._shape = x.shape
         return x.reshape(x.shape[0], -1)
 
     def backward(self, d_out):
-        return d_out.reshape(self.last_shape)
+        return d_out.reshape(self._shape)
 
 
-# ─── FULL CNN MODEL ───────────────────────────────────────────────────────────
-
-class SimpleCNN:
+class FCLayer:
     """
-    3-conv-layer CNN built entirely from scratch with NumPy.
-    
-    Improved Architecture (Modern Baseline):
-        Conv1(3→8)   + BN + ReLU + MaxPool
-        Conv2(8→16)  + BN + ReLU + MaxPool
-        Conv3(16→32) + BN + ReLU + MaxPool
-        Flatten
-        FC1(32*12*12→256) + BN + ReLU + Dropout
-        FC2(256→num_classes) + Softmax
+    Fully-connected (dense) layer.
+
+    Attributes
+    ----------
+    weights  : (in_features, out_features)
+    biases   : (out_features,)
+    d_weights, d_biases : gradients (set during backward)
     """
 
-    def __init__(self, num_classes=131, input_size=100, dropout_p=0.5):
-        # Calculate feature map size after 3 MaxPool layers
-        # Input: 100 → after 1st pool: 50 → after 2nd: 25 → after 3rd: 12
-        fc_input_size = 32 * 12 * 12  # 32 channels * 12 * 12 = 4608
-        
-        # Build layers in order
-        self.layers = []
-        
-        # Convolutional blocks with BatchNorm
-        # Block 1
-        self.layers.append(ConvLayer(in_channels=3, num_filters=8, kernel_size=3))
-        self.layers.append(BatchNormLayer(8))
-        # ReLU will be applied separately
-        self.layers.append(MaxPoolLayer(pool_size=2))
-        
-        # Block 2
-        self.layers.append(ConvLayer(in_channels=8, num_filters=16, kernel_size=3))
-        self.layers.append(BatchNormLayer(16))
-        self.layers.append(MaxPoolLayer(pool_size=2))
-        
-        # Block 3
-        self.layers.append(ConvLayer(in_channels=16, num_filters=32, kernel_size=3))
-        self.layers.append(BatchNormLayer(32))
-        self.layers.append(MaxPoolLayer(pool_size=2))
-        
-        # Flatten and FC layers
-        self.layers.append(FlattenLayer())
-        self.layers.append(FCLayer(fc_input_size, 256))
-        self.layers.append(BatchNormLayer(256))
-        self.layers.append(DropoutLayer(dropout_p))
-        self.layers.append(FCLayer(256, num_classes))
-        
-        # Track which layers have ReLU after them
-        self._relu_after = {1, 4, 7, 11}  # Indices of BatchNorm layers
-        self._relu_cache = {}
-        
-        # Track layer types for optimizer
-        self._bn_layers = [i for i, l in enumerate(self.layers) 
-                          if isinstance(l, BatchNormLayer)]
-        self._dropout_layers = [i for i, l in enumerate(self.layers) 
-                               if isinstance(l, DropoutLayer)]
-        
-        # Store input size for inference time measurement
-        self.input_size = input_size
+    def __init__(self, in_features, out_features):
+        self.in_features  = in_features
+        self.out_features = out_features
 
-    def forward(self, x, training=True):
-        """
-        Full forward pass.
-        x: (batch, 3, 100, 100) — pixel values normalised to [0, 1]
-        training: whether to use training mode (enables dropout and BN statistics)
-        Returns: (batch, num_classes) probabilities
-        """
-        out = x
-        for i, layer in enumerate(self.layers):
-            if isinstance(layer, (BatchNormLayer, DropoutLayer)):
-                out = layer.forward(out, training=training)
-            else:
-                out = layer.forward(out)
-            
-            if i in self._relu_after:
-                self._relu_cache[i] = out.copy()
-                out = relu(out)
-        
-        # Final softmax
-        return softmax(out)
+        # He initialisation
+        self.weights = np.random.randn(
+            in_features, out_features
+        ).astype(np.float32) * np.sqrt(2.0 / in_features)
+
+        self.biases   = np.zeros(out_features, dtype=np.float32)
+        self.d_weights = np.zeros_like(self.weights)
+        self.d_biases  = np.zeros_like(self.biases)
+
+    def forward(self, x):
+        """x : (N, in_features)  →  (N, out_features)"""
+        self._x = x
+        return x @ self.weights + self.biases
 
     def backward(self, d_out):
         """
-        Full backward pass. Propagates gradient through all layers.
-        d_out: gradient of loss w.r.t. softmax output
+        d_out : (N, out_features)
+        returns: (N, in_features)
         """
-        grad = d_out
-        for i in reversed(range(len(self.layers))):
-            if i in self._relu_after:
-                grad = grad * relu_derivative(self._relu_cache[i])
-            grad = self.layers[i].backward(grad)
-        return grad
+        self.d_weights = self._x.T @ d_out
+        self.d_biases  = np.sum(d_out, axis=0)
+        return d_out @ self.weights.T
+
+
+class SoftmaxLayer:
+    """
+    Numerically stable Softmax.
+    Note: backward is a pass-through — the combined cross-entropy + softmax
+    gradient is computed externally in person2_train.py (cross_entropy_loss).
+    """
+
+    def forward(self, x):
+        """x : (N, num_classes)  →  (N, num_classes) probabilities"""
+        shifted = x - np.max(x, axis=1, keepdims=True)
+        exp_x   = np.exp(shifted)
+        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
+
+    def backward(self, d_out):
+        # Gradient handled externally via cross_entropy_loss
+        return d_out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIMPLECNN — THE FULL MODEL
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SimpleCNN:
+    """
+    A simple CNN for image classification on Fruits-360 (100×100 RGB).
+
+    Architecture
+    ------------
+    Conv(3→8, 3×3, pad=1) → ReLU → MaxPool(2×2)   → spatial: 50×50
+    Conv(8→16, 3×3, pad=1) → ReLU → MaxPool(2×2)  → spatial: 25×25
+    Flatten                                          → 16*25*25 = 10 000
+    FC(10000 → 128) → ReLU
+    FC(128 → num_classes)
+    Softmax
+
+    Public interface (used by person2, person3, person4)
+    -----------------------------------------------------
+    model.forward(X)              — returns softmax probabilities (N, num_classes)
+    model.backward(d_probs)       — runs backprop, stores gradients in each layer
+    model.get_trainable_layers()  — list of ConvLayer / FCLayer objects
+    model.get_param_count()       — total number of learnable parameters (int)
+    """
+
+    def __init__(self, num_classes=131):
+        self.num_classes = num_classes
+
+        self.conv1   = ConvLayer(in_channels=3,  out_channels=8,  kernel_size=3, padding=1)
+        self.relu1   = ReLULayer()
+        self.pool1   = MaxPoolLayer(pool_size=2, stride=2)
+
+        self.conv2   = ConvLayer(in_channels=8,  out_channels=16, kernel_size=3, padding=1)
+        self.relu2   = ReLULayer()
+        self.pool2   = MaxPoolLayer(pool_size=2, stride=2)
+
+        self.flatten = FlattenLayer()
+
+        # After two 2×2 pools on 100×100: 100 → 50 → 25
+        # Flattened size = 16 * 25 * 25 = 10000
+        self.fc1     = FCLayer(in_features=16 * 25 * 25, out_features=128)
+        self.relu3   = ReLULayer()
+
+        self.fc2     = FCLayer(in_features=128, out_features=num_classes)
+        self.softmax = SoftmaxLayer()
+
+        self._layers = [
+            self.conv1, self.relu1, self.pool1,
+            self.conv2, self.relu2, self.pool2,
+            self.flatten,
+            self.fc1,   self.relu3,
+            self.fc2,   self.softmax,
+        ]
+
+    def forward(self, x):
+        """
+        x      : (N, 3, 100, 100)  float32  — normalised [0, 1]
+        returns: (N, num_classes)  float32  — softmax probabilities
+        """
+        out = x
+        for layer in self._layers:
+            out = layer.forward(out)
+        return out
+
+    def backward(self, d_probs):
+        """
+        d_probs : (N, num_classes) — gradient from cross_entropy_loss()
+        Stores d_filters/d_biases in ConvLayers, d_weights/d_biases in FCLayers.
+        """
+        grad = d_probs
+        for layer in reversed(self._layers):
+            grad = layer.backward(grad)
 
     def get_trainable_layers(self):
-        """Returns only layers that have trainable parameters."""
-        trainable = []
-        for layer in self.layers:
-            if isinstance(layer, (ConvLayer, FCLayer, BatchNormLayer)):
-                trainable.append(layer)
-        return trainable
+        """
+        Returns only layers with learnable parameters (ConvLayer, FCLayer).
+        Used by person2 (save/load/optimizer), person3 (pruning), person4 (quantization).
+        Ordered same as forward pass so index-based naming is consistent.
+        """
+        return [l for l in self._layers if isinstance(l, (ConvLayer, FCLayer))]
 
     def get_param_count(self):
-        """Total number of trainable parameters."""
+        """Total number of learnable parameters across all layers."""
         total = 0
         for layer in self.get_trainable_layers():
-            if isinstance(layer, ConvLayer):
+            if hasattr(layer, 'filters'):
                 total += layer.filters.size + layer.biases.size
-            elif isinstance(layer, FCLayer):
+            else:
                 total += layer.weights.size + layer.biases.size
-            elif isinstance(layer, BatchNormLayer):
-                total += layer.gamma.size + layer.beta.size
         return total
-    
-    def eval(self):
-        """Set model to evaluation mode (disables dropout, uses running stats for BN)."""
-        for layer in self.layers:
-            if hasattr(layer, 'training'):
-                layer.training = False
-    
-    def train(self):
-        """Set model to training mode."""
-        for layer in self.layers:
-            if hasattr(layer, 'training'):
-                layer.training = True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STANDALONE SELF-TEST — runs without needing any other person's file
+#
+#  Usage:
+#      python person1_model.py
+#      python person1_model.py --epochs 5 --batch_size 4 --num_classes 10
+#
+#  Uses randomly generated fake images so no dataset is needed.
+#  Runs a real mini training loop so you can see loss going down.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _cross_entropy(probs, labels):
+    """Minimal cross-entropy loss — no dependency on person2_train."""
+    N   = len(labels)
+    eps = 1e-9
+    loss   = -np.mean(np.log(probs[np.arange(N), labels] + eps))
+    d      = probs.copy()
+    d[np.arange(N), labels] -= 1
+    d     /= N
+    return loss, d
+
+
+def _sgd_step(model, lr=0.01):
+    """Minimal SGD update — no dependency on person2_train."""
+    for layer in model.get_trainable_layers():
+        if hasattr(layer, 'filters'):
+            layer.filters -= lr * layer.d_filters
+            layer.biases  -= lr * layer.d_biases
+        else:
+            layer.weights -= lr * layer.d_weights
+            layer.biases  -= lr * layer.d_biases
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Person 1 self-test — trains SimpleCNN on fake data (no dataset needed)"
+    )
+    parser.add_argument("--epochs",      type=int, default=3,
+                        help="Number of training epochs (default: 3)")
+    parser.add_argument("--batch_size",  type=int, default=4,
+                        help="Batch size (default: 4, keep small for speed)")
+    parser.add_argument("--num_classes", type=int, default=10,
+                        help="Number of fake classes (default: 10)")
+    parser.add_argument("--num_samples", type=int, default=40,
+                        help="Number of fake training images (default: 40)")
+    args = parser.parse_args()
+
+    print("=" * 58)
+    print("  Person 1 — SimpleCNN self-test")
+    print("  (fake random data, no dataset needed)")
+    print("=" * 58)
+
+    # ── Architecture check ────────────────────────────────────────────────────
+    model = SimpleCNN(num_classes=args.num_classes)
+    print(f"\n  Parameters : {model.get_param_count():,}")
+    print(f"  Trainable layers ({len(model.get_trainable_layers())}):")
+    for i, l in enumerate(model.get_trainable_layers()):
+        kind = "Conv" if hasattr(l, 'filters') else "FC  "
+        w    = l.filters if hasattr(l, 'filters') else l.weights
+        print(f"    [{i}] {kind}  shape={w.shape}  params={w.size + l.biases.size:,}")
+
+    # ── Forward + backward shape checks ──────────────────────────────────────
+    print(f"\n  [Check 1] Forward pass ... ", end="", flush=True)
+    dummy = np.random.randn(2, 3, 100, 100).astype(np.float32)
+    probs = model.forward(dummy)
+    assert probs.shape == (2, args.num_classes), \
+        f"Bad output shape: expected (2, {args.num_classes}), got {probs.shape}"
+    assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5), \
+        "Softmax rows don't sum to 1"
+    print(f"OK — output shape {probs.shape}, probs sum to 1.0  ✓")
+
+    print(f"  [Check 2] Backward pass ... ", end="", flush=True)
+    fake_labels = np.array([0, 1])
+    _, d = _cross_entropy(probs, fake_labels)
+    model.backward(d)
+    for i, l in enumerate(model.get_trainable_layers()):
+        if hasattr(l, 'filters'):
+            assert l.d_filters.shape == l.filters.shape
+        else:
+            assert l.d_weights.shape == l.weights.shape
+    print("OK — all gradient shapes correct  ✓")
+
+    # ── Mini training loop on fake data ──────────────────────────────────────
+    print(f"\n  [Check 3] Mini training loop")
+    print(f"  Fake dataset: {args.num_samples} images | "
+          f"{args.num_classes} classes | "
+          f"{args.epochs} epochs | "
+          f"batch={args.batch_size}")
+    print()
+
+    # Generate random fake images and labels
+    np.random.seed(42)
+    X_fake = np.random.randn(args.num_samples, 3, 100, 100).astype(np.float32)
+    y_fake = np.random.randint(0, args.num_classes, size=args.num_samples)
+
+    model  = SimpleCNN(num_classes=args.num_classes)
+    first_loss, last_loss = None, None
+
+    for epoch in range(1, args.epochs + 1):
+        epoch_loss  = 0.0
+        num_batches = 0
+        idx         = np.random.permutation(args.num_samples)
+
+        for start in range(0, args.num_samples, args.batch_size):
+            batch_idx = idx[start:start + args.batch_size]
+            X_batch   = X_fake[batch_idx]
+            y_batch   = y_fake[batch_idx]
+
+            probs          = model.forward(X_batch)
+            loss, d_probs  = _cross_entropy(probs, y_batch)
+            epoch_loss    += loss
+            num_batches   += 1
+
+            model.backward(d_probs)
+            _sgd_step(model, lr=0.01)
+
+        avg_loss = epoch_loss / num_batches
+
+        # Quick accuracy on full fake set
+        all_probs = model.forward(X_fake)
+        preds     = np.argmax(all_probs, axis=1)
+        acc       = 100.0 * np.mean(preds == y_fake)
+
+        print(f"    Epoch [{epoch}/{args.epochs}]  "
+              f"Loss: {avg_loss:.4f}  |  Accuracy: {acc:.1f}%")
+
+        if first_loss is None:
+            first_loss = avg_loss
+        last_loss = avg_loss
+
+    # ── Final verdict ─────────────────────────────────────────────────────────
+    print()
+    loss_went_down = last_loss < first_loss
+    status = "✓ Loss decreased as expected" if loss_went_down \
+             else "⚠ Loss did not decrease — check gradients"
+    print(f"  First epoch loss : {first_loss:.4f}")
+    print(f"  Last  epoch loss : {last_loss:.4f}  {status}")
+
+    print()
+    if loss_went_down:
+        print("  ✓ All checks passed — person1_model.py is working correctly.")
+        print("  Person 2 can now use this model for real training.")
+    else:
+        print("  ✗ Something may be wrong — loss should decrease during training.")
+
+    print("=" * 58)

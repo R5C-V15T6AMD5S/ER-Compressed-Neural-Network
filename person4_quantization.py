@@ -19,6 +19,7 @@ import os
 import argparse
 import numpy as np
 
+from logger import Logger
 from person1_model import SimpleCNN, ConvLayer, FCLayer
 from person2_train import (load_dataset, compute_accuracy,
                             save_model, load_model)
@@ -33,32 +34,19 @@ def compute_scale_and_zero(r_min, r_max, q_min=-128, q_max=127):
     From the survey paper:
         S = (R_max - R_min) / (Q_max - Q_min)    [Equation 1]
         Z = Q_max - R_max / S                     [Equation 2]
-
-    R = real floating-point range
-    Q = quantized integer range
-    S = scale factor (FP32)
-    Z = zero-point (INT8) — the quantized value corresponding to 0.0
     """
     S = (r_max - r_min) / (q_max - q_min)
-
-    # Avoid division by zero for constant layers
     if S == 0:
         S = 1e-8
-
     Z = q_max - r_max / S
-    Z = int(np.round(np.clip(Z, q_min, q_max)))  # must be integer
-
+    Z = int(np.round(np.clip(Z, q_min, q_max)))
     return float(S), Z
 
 
 def quantize(weights, S, Z, q_min=-128, q_max=127):
     """
     Quantize FP32 weights → INT8.
-
-    From the survey paper:
-        Q = R / S + Z    [Equation 3]
-
-    Clips to valid INT8 range and rounds to nearest integer.
+    Q = R / S + Z    [Equation 3]
     """
     Q = weights / S + Z
     Q = np.round(Q)
@@ -69,12 +57,7 @@ def quantize(weights, S, Z, q_min=-128, q_max=127):
 def dequantize(Q, S, Z):
     """
     Dequantize INT8 back to FP32 for inference.
-
-    From the survey paper:
-        R = (Q - Z) * S    [Equation 4]
-
-    This is used because hardware may not support INT8 matmul in all cases.
-    The round-trip FP32 → INT8 → FP32 shows the accuracy impact of quantization.
+    R = (Q - Z) * S    [Equation 4]
     """
     return (Q.astype(np.float32) - Z) * S
 
@@ -96,19 +79,14 @@ def quantize_layer(layer):
 
     S, Z = compute_scale_and_zero(r_min, r_max)
 
-    # Quantize to INT8
-    w_int8 = quantize(w, S, Z)
-
-    # Dequantize back to FP32 for inference
+    w_int8    = quantize(w, S, Z)
     w_dequant = dequantize(w_int8, S, Z)
 
-    # Apply dequantized weights back to layer
     if hasattr(layer, 'filters'):
         layer.filters = w_dequant
     else:
         layer.weights = w_dequant
 
-    # Calculate quantization error
     error = np.mean(np.abs(w - w_dequant))
 
     return {
@@ -139,8 +117,8 @@ def quantize_model(model):
         meta = quantize_layer(layer)
         metadata[i] = meta
 
-        shape_str    = str(meta['shape'])
-        int8_range   = f"[{meta['int8_min']}, {meta['int8_max']}]"
+        shape_str  = str(meta['shape'])
+        int8_range = f"[{meta['int8_min']}, {meta['int8_max']}]"
         print(f"  {i:<3} {layer_type:<5} {shape_str:<22} "
               f"{meta['S']:>10.6f} {meta['Z']:>6} "
               f"{meta['error']:>12.6f} {int8_range:>14}")
@@ -153,20 +131,19 @@ def quantize_model(model):
 
 def estimate_int8_size_kb(model):
     """
-    Estimate the size if weights were stored as INT8 (1 byte per weight)
-    vs FP32 (4 bytes per weight). Shows theoretical compression ratio.
+    Estimate size if weights were stored as INT8 (1 byte) vs FP32 (4 bytes).
     """
     total_weights = 0
     for layer in model.get_trainable_layers():
         w = layer.filters if hasattr(layer, 'filters') else layer.weights
         total_weights += w.size
 
-    fp32_kb = total_weights * 4 / 1024   # 4 bytes per float32
-    int8_kb = total_weights * 1 / 1024   # 1 byte per int8
+    fp32_kb = total_weights * 4 / 1024
+    int8_kb = total_weights * 1 / 1024
     return fp32_kb, int8_kb
 
 
-def get_model_size_kb(model, path="tmp_quant"):
+def get_model_size_kb(model, path="models/tmp_quant"):
     save_model(model, path)
     size = os.path.getsize(path + ".npz") / 1024
     os.remove(path + ".npz")
@@ -186,83 +163,101 @@ def measure_inference_ms(model, runs=100, img_size=100):
 
 # ─── COMPARISON TABLE ─────────────────────────────────────────────────────────
 
-def print_comparison(orig, quant, fp32_kb, int8_kb):
-    print("\n" + "=" * 60)
-    print("  COMPARISON: Original (FP32) vs Post-Training Quantization (INT8)")
-    print("=" * 60)
-    print(f"{'Metric':<30} {'Original':>14} {'Quantized':>12}")
-    print("-" * 60)
-    print(f"{'Accuracy (%)':<30} {orig['acc']:>13.2f}% {quant['acc']:>11.2f}%")
-    print(f"{'Saved Size (KB)':<30} {orig['size']:>14.1f} {quant['size']:>12.1f}")
-    print(f"{'Theoretical FP32 Size (KB)':<30} {fp32_kb:>14.1f} {'':>12}")
-    print(f"{'Theoretical INT8 Size (KB)':<30} {'':>14} {int8_kb:>12.1f}")
-    print(f"{'Theoretical Compression':<30} {'':>14} {'4x':>12}")
-    print(f"{'Inference (ms)':<30} {orig['inf']:>14.2f} {quant['inf']:>12.2f}")
-    print("-" * 60)
-    print(f"{'Accuracy Drop':<30} {orig['acc'] - quant['acc']:>13.2f}%")
-    print(f"{'Speedup':<30} {orig['inf'] / quant['inf']:>13.2f}x")
-    print("=" * 60)
-    print()
-    print("  NOTE: 'Saved Size' uses .npz (FP32 storage for both).")
-    print("  'Theoretical INT8 Size' shows what a real INT8 deployment")
-    print("  would save — a 4x reduction over FP32 storage.\n")
+def print_comparison(orig, quant, fp32_kb, int8_kb, log):
+    log("")
+    log("=" * 60)
+    log("  COMPARISON: Original (FP32) vs Post-Training Quantization (INT8)")
+    log("=" * 60)
+    log(f"{'Metric':<30} {'Original':>14} {'Quantized':>12}")
+    log("-" * 60)
+    log(f"{'Accuracy (%)':<30} {orig['acc']:>13.2f}% {quant['acc']:>11.2f}%")
+    log(f"{'Saved Size (KB)':<30} {orig['size']:>14.1f} {quant['size']:>12.1f}")
+    log(f"{'Theoretical FP32 Size (KB)':<30} {fp32_kb:>14.1f} {'':>12}")
+    log(f"{'Theoretical INT8 Size (KB)':<30} {'':>14} {int8_kb:>12.1f}")
+    log(f"{'Theoretical Compression':<30} {'':>14} {'4x':>12}")
+    log(f"{'Inference (ms)':<30} {orig['inf']:>14.2f} {quant['inf']:>12.2f}")
+    log("-" * 60)
+    log(f"{'Accuracy Drop':<30} {orig['acc'] - quant['acc']:>13.2f}%")
+    log(f"{'Speedup':<30} {orig['inf'] / quant['inf']:>13.2f}x")
+    log("=" * 60)
+    log("")
+    log("  NOTE: 'Saved Size' uses .npz (FP32 storage for both).")
+    log("  'Theoretical INT8 Size' shows what a real INT8 deployment")
+    log("  would save — a 4x reduction over FP32 storage.")
+    log("")
 
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
 def main(args):
-    # ── Load data ─────────────────────────────────────────────────────────────
+    log = Logger("person4")
+
+    # Check model file exists before doing anything
+    model_path = args.model_path if args.model_path.endswith(".npz")                  else args.model_path + ".npz"
+    if not os.path.exists(model_path):
+        log("=" * 60)
+        log("  ERROR — No trained model found!")
+        log("=" * 60)
+        log(f"  Expected file: {model_path}")
+        log("")
+        log("  Person 4 needs a trained model from Person 2 first.")
+        log("  Run this command to train one:")
+        log("")
+        log(f"    python person2_train.py --data_dir {args.data_dir} --epochs 3 --max_per_class 50")
+        log("")
+        log("  Then re-run person4_quantization.py.")
+        log.close()
+        return
+
     X_test, y_test, classes = load_dataset(
         args.data_dir, "Test", max_per_class=args.max_per_class
     )
     num_classes = len(classes)
 
-    # ── Load original model ───────────────────────────────────────────────────
-    print(f"\n[Model] Loading from '{args.model_path}'...")
+    log(f"[Model] Loading from '{args.model_path}'...")
     model = SimpleCNN(num_classes=num_classes)
     model = load_model(model, args.model_path)
 
-    # ── Baseline stats ────────────────────────────────────────────────────────
-    print("\n[Baseline] Evaluating original FP32 model...")
+    log.section("BASELINE")
     orig_acc  = compute_accuracy(model, X_test, y_test, args.batch_size)
     orig_size = get_model_size_kb(model)
     orig_inf  = measure_inference_ms(model)
-    print(f"  Accuracy : {orig_acc:.2f}%")
-    print(f"  Size     : {orig_size:.1f} KB")
-    print(f"  Inference: {orig_inf:.2f} ms")
+    log(f"  Accuracy : {orig_acc:.2f}%")
+    log(f"  Size     : {orig_size:.1f} KB")
+    log(f"  Inference: {orig_inf:.2f} ms")
 
     original_stats = {"acc": orig_acc, "size": orig_size, "inf": orig_inf}
 
-    # ── Apply quantization ────────────────────────────────────────────────────
-    print("\n[Quantization] Applying Algorithm 1 from the survey paper...")
-    print("  Steps: min/max → S and Z → Q = R/S + Z → R = (Q-Z)*S")
+    log.section("QUANTIZATION")
+    log("[Quantization] Applying Algorithm 1 from the survey paper...")
+    log("  Steps: min/max → S and Z → Q = R/S + Z → R = (Q-Z)*S")
 
     model, metadata = quantize_model(model)
 
-    # ── Quantized model stats ─────────────────────────────────────────────────
-    print("[Evaluation] Evaluating quantized model (dequantized weights)...")
-    quant_acc  = compute_accuracy(model, X_test, y_test, args.batch_size)
-    quant_size = get_model_size_kb(model)
-    quant_inf  = measure_inference_ms(model)
+    log.section("RESULTS")
+    quant_acc        = compute_accuracy(model, X_test, y_test, args.batch_size)
+    quant_size       = get_model_size_kb(model)
+    quant_inf        = measure_inference_ms(model)
     fp32_kb, int8_kb = estimate_int8_size_kb(model)
 
-    print(f"  Accuracy : {quant_acc:.2f}%")
-    print(f"  Size     : {quant_size:.1f} KB")
-    print(f"  Inference: {quant_inf:.2f} ms")
+    log(f"  Accuracy : {quant_acc:.2f}%")
+    log(f"  Size     : {quant_size:.1f} KB")
+    log(f"  Inference: {quant_inf:.2f} ms")
 
     quantized_stats = {"acc": quant_acc, "size": quant_size, "inf": quant_inf}
 
+    os.makedirs(os.path.dirname(args.save_path) or "models", exist_ok=True)
     save_model(model, args.save_path)
-    print(f"\n  ✓ Quantized model saved to '{args.save_path}.npz'")
+    log(f"  ✓ Quantized model saved to '{args.save_path}.npz'")
 
-    # ── Final comparison ──────────────────────────────────────────────────────
-    print_comparison(original_stats, quantized_stats, fp32_kb, int8_kb)
+    print_comparison(original_stats, quantized_stats, fp32_kb, int8_kb, log)
 
-    # ── Per-layer quantization summary ───────────────────────────────────────
-    print("  Per-layer quantization error summary:")
+    log("  Per-layer quantization error summary:")
     for i, meta in metadata.items():
-        print(f"    Layer {i}: avg weight error = {meta['error']:.6f}, "
-              f"S={meta['S']:.6f}, Z={meta['Z']}")
+        log(f"    Layer {i}: avg weight error = {meta['error']:.6f}, "
+            f"S={meta['S']:.6f}, Z={meta['Z']}")
+
+    log.close()
 
 
 if __name__ == "__main__":
@@ -270,8 +265,8 @@ if __name__ == "__main__":
         description="Post-training quantization of SimpleCNN (from scratch)"
     )
     parser.add_argument("--data_dir",      type=str,  default="./fruits-360")
-    parser.add_argument("--model_path",    type=str,  default="cnn_fruits")
-    parser.add_argument("--save_path",     type=str,  default="cnn_quantized")
+    parser.add_argument("--model_path",    type=str,  default="models/cnn_fruits")
+    parser.add_argument("--save_path",     type=str,  default="models/cnn_quantized")
     parser.add_argument("--batch_size",    type=int,  default=32)
     parser.add_argument("--max_per_class", type=int,  default=None)
     args = parser.parse_args()
