@@ -88,3 +88,4 @@
   Techniques from: 'Model Compression for Deep Neural Networks'
   Li, Li & Meng, Computers 2023 — Section 2 (Pruning), Section 3 (Quantization)
 
+
