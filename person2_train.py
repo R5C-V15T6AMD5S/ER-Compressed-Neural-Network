@@ -209,6 +209,7 @@ def train(args):
     )
     num_classes = len(classes)
 
+    os.makedirs(os.path.dirname(args.save_path) or "models", exist_ok=True)
     model     = SimpleCNN(num_classes=num_classes)
     optimizer = SGDMomentum(model, lr=args.lr, momentum=0.9)
 
@@ -255,7 +256,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs",        type=int,   default=15)
     parser.add_argument("--batch_size",    type=int,   default=32)
     parser.add_argument("--lr",            type=float, default=0.01)
-    parser.add_argument("--save_path",     type=str,   default="cnn_fruits")
+    parser.add_argument("--save_path",     type=str,   default="models/cnn_fruits")
     parser.add_argument("--max_per_class", type=int,   default=None)
     args = parser.parse_args()
     train(args)

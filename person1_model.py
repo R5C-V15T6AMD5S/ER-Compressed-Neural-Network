@@ -382,50 +382,150 @@ class SimpleCNN:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SMOKE TEST
+#  STANDALONE SELF-TEST — runs without needing any other person's file
+#
+#  Usage:
+#      python person1_model.py
+#      python person1_model.py --epochs 5 --batch_size 4 --num_classes 10
+#
+#  Uses randomly generated fake images so no dataset is needed.
+#  Runs a real mini training loop so you can see loss going down.
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _cross_entropy(probs, labels):
+    """Minimal cross-entropy loss — no dependency on person2_train."""
+    N   = len(labels)
+    eps = 1e-9
+    loss   = -np.mean(np.log(probs[np.arange(N), labels] + eps))
+    d      = probs.copy()
+    d[np.arange(N), labels] -= 1
+    d     /= N
+    return loss, d
+
+
+def _sgd_step(model, lr=0.01):
+    """Minimal SGD update — no dependency on person2_train."""
+    for layer in model.get_trainable_layers():
+        if hasattr(layer, 'filters'):
+            layer.filters -= lr * layer.d_filters
+            layer.biases  -= lr * layer.d_biases
+        else:
+            layer.weights -= lr * layer.d_weights
+            layer.biases  -= lr * layer.d_biases
+
+
 if __name__ == "__main__":
-    print("=" * 55)
-    print("  SimpleCNN — smoke test")
-    print("=" * 55)
+    import argparse
 
-    NUM_CLASSES = 20
-    BATCH       = 2    # keep small so the naive loops finish quickly
+    parser = argparse.ArgumentParser(
+        description="Person 1 self-test — trains SimpleCNN on fake data (no dataset needed)"
+    )
+    parser.add_argument("--epochs",      type=int, default=3,
+                        help="Number of training epochs (default: 3)")
+    parser.add_argument("--batch_size",  type=int, default=4,
+                        help="Batch size (default: 4, keep small for speed)")
+    parser.add_argument("--num_classes", type=int, default=10,
+                        help="Number of fake classes (default: 10)")
+    parser.add_argument("--num_samples", type=int, default=40,
+                        help="Number of fake training images (default: 40)")
+    args = parser.parse_args()
 
-    model = SimpleCNN(num_classes=NUM_CLASSES)
-    print(f"  Parameters : {model.get_param_count():,}")
+    print("=" * 58)
+    print("  Person 1 — SimpleCNN self-test")
+    print("  (fake random data, no dataset needed)")
+    print("=" * 58)
+
+    # ── Architecture check ────────────────────────────────────────────────────
+    model = SimpleCNN(num_classes=args.num_classes)
+    print(f"\n  Parameters : {model.get_param_count():,}")
     print(f"  Trainable layers ({len(model.get_trainable_layers())}):")
     for i, l in enumerate(model.get_trainable_layers()):
         kind = "Conv" if hasattr(l, 'filters') else "FC  "
         w    = l.filters if hasattr(l, 'filters') else l.weights
         print(f"    [{i}] {kind}  shape={w.shape}  params={w.size + l.biases.size:,}")
 
-    # Forward
-    dummy_X = np.random.randn(BATCH, 3, 100, 100).astype(np.float32)
-    print(f"\n  Running forward pass (batch={BATCH}) ... ", end="", flush=True)
-    probs = model.forward(dummy_X)
-    print("done")
-    assert probs.shape == (BATCH, NUM_CLASSES), f"Expected ({BATCH},{NUM_CLASSES}), got {probs.shape}"
-    assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5), "Softmax rows don't sum to 1"
-    print(f"  Output shape : {probs.shape}  ✓")
-    print(f"  Prob sums    : {probs.sum(axis=1)}  ✓")
+    # ── Forward + backward shape checks ──────────────────────────────────────
+    print(f"\n  [Check 1] Forward pass ... ", end="", flush=True)
+    dummy = np.random.randn(2, 3, 100, 100).astype(np.float32)
+    probs = model.forward(dummy)
+    assert probs.shape == (2, args.num_classes), \
+        f"Bad output shape: expected (2, {args.num_classes}), got {probs.shape}"
+    assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5), \
+        "Softmax rows don't sum to 1"
+    print(f"OK — output shape {probs.shape}, probs sum to 1.0  ✓")
 
-    # Backward
-    print("  Running backward pass ... ", end="", flush=True)
-    d_probs = probs.copy()
-    fake_labels = np.random.randint(0, NUM_CLASSES, size=BATCH)
-    d_probs[np.arange(BATCH), fake_labels] -= 1
-    d_probs /= BATCH
-    model.backward(d_probs)
-    print("done")
-
+    print(f"  [Check 2] Backward pass ... ", end="", flush=True)
+    fake_labels = np.array([0, 1])
+    _, d = _cross_entropy(probs, fake_labels)
+    model.backward(d)
     for i, l in enumerate(model.get_trainable_layers()):
         if hasattr(l, 'filters'):
-            assert l.d_filters.shape == l.filters.shape, f"Layer {i} d_filters shape mismatch"
+            assert l.d_filters.shape == l.filters.shape
         else:
-            assert l.d_weights.shape == l.weights.shape, f"Layer {i} d_weights shape mismatch"
-    print("  Gradients    : all correct shapes  ✓")
+            assert l.d_weights.shape == l.weights.shape
+    print("OK — all gradient shapes correct  ✓")
 
-    print("\n  ✓ All checks passed. person1_model.py is ready.")
-    print("=" * 55)
+    # ── Mini training loop on fake data ──────────────────────────────────────
+    print(f"\n  [Check 3] Mini training loop")
+    print(f"  Fake dataset: {args.num_samples} images | "
+          f"{args.num_classes} classes | "
+          f"{args.epochs} epochs | "
+          f"batch={args.batch_size}")
+    print()
+
+    # Generate random fake images and labels
+    np.random.seed(42)
+    X_fake = np.random.randn(args.num_samples, 3, 100, 100).astype(np.float32)
+    y_fake = np.random.randint(0, args.num_classes, size=args.num_samples)
+
+    model  = SimpleCNN(num_classes=args.num_classes)
+    first_loss, last_loss = None, None
+
+    for epoch in range(1, args.epochs + 1):
+        epoch_loss  = 0.0
+        num_batches = 0
+        idx         = np.random.permutation(args.num_samples)
+
+        for start in range(0, args.num_samples, args.batch_size):
+            batch_idx = idx[start:start + args.batch_size]
+            X_batch   = X_fake[batch_idx]
+            y_batch   = y_fake[batch_idx]
+
+            probs          = model.forward(X_batch)
+            loss, d_probs  = _cross_entropy(probs, y_batch)
+            epoch_loss    += loss
+            num_batches   += 1
+
+            model.backward(d_probs)
+            _sgd_step(model, lr=0.01)
+
+        avg_loss = epoch_loss / num_batches
+
+        # Quick accuracy on full fake set
+        all_probs = model.forward(X_fake)
+        preds     = np.argmax(all_probs, axis=1)
+        acc       = 100.0 * np.mean(preds == y_fake)
+
+        print(f"    Epoch [{epoch}/{args.epochs}]  "
+              f"Loss: {avg_loss:.4f}  |  Accuracy: {acc:.1f}%")
+
+        if first_loss is None:
+            first_loss = avg_loss
+        last_loss = avg_loss
+
+    # ── Final verdict ─────────────────────────────────────────────────────────
+    print()
+    loss_went_down = last_loss < first_loss
+    status = "✓ Loss decreased as expected" if loss_went_down \
+             else "⚠ Loss did not decrease — check gradients"
+    print(f"  First epoch loss : {first_loss:.4f}")
+    print(f"  Last  epoch loss : {last_loss:.4f}  {status}")
+
+    print()
+    if loss_went_down:
+        print("  ✓ All checks passed — person1_model.py is working correctly.")
+        print("  Person 2 can now use this model for real training.")
+    else:
+        print("  ✗ Something may be wrong — loss should decrease during training.")
+
+    print("=" * 58)

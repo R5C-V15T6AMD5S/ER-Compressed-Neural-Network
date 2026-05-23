@@ -15,6 +15,7 @@ Quick test (small data, fast):
 """
 
 import argparse
+import os
 import numpy as np
 
 from logger import Logger
@@ -36,6 +37,7 @@ def run_training(args, X_train, y_train, X_test, y_test, num_classes, log):
     log("  STEP 1 — Training original CNN (Person 1 + Person 2)")
     log("=" * 60)
 
+    os.makedirs(os.path.dirname(args.save_path) or "models", exist_ok=True)
     model     = SimpleCNN(num_classes=num_classes)
     optimizer = SGDMomentum(model, lr=args.lr, momentum=0.9)
 
@@ -98,7 +100,8 @@ def run_pruning(args, trained_model, X_train, y_train, X_test, y_test, num_class
                            lr=args.finetune_lr,
                            batch_size=args.batch_size)
 
-    save_model(model, "cnn_pruned")
+    os.makedirs("models", exist_ok=True)
+    save_model(model, "models/cnn_pruned")
 
     acc      = compute_accuracy(model, X_test, y_test, args.batch_size)
     size     = get_model_size_kb(model)
@@ -122,7 +125,8 @@ def run_quantization(args, X_test, y_test, num_classes, log):
     log("[Quantization] Applying PTQ: FP32 → INT8 → FP32 (dequant)...")
     model, metadata = quantize_model(model)
 
-    save_model(model, "cnn_quantized")
+    os.makedirs("models", exist_ok=True)
+    save_model(model, "models/cnn_quantized")
 
     acc              = compute_accuracy(model, X_test, y_test, args.batch_size)
     size             = get_model_size_kb(model)
@@ -216,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs",          type=int,   default=15)
     parser.add_argument("--batch_size",      type=int,   default=32)
     parser.add_argument("--lr",              type=float, default=0.01)
-    parser.add_argument("--save_path",       type=str,   default="cnn_fruits")
+    parser.add_argument("--save_path",       type=str,   default="models/cnn_fruits")
     parser.add_argument("--prune_amount",    type=float, default=0.5)
     parser.add_argument("--finetune_epochs", type=int,   default=3)
     parser.add_argument("--finetune_lr",     type=float, default=0.001)

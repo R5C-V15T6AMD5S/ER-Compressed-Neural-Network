@@ -143,7 +143,7 @@ def estimate_int8_size_kb(model):
     return fp32_kb, int8_kb
 
 
-def get_model_size_kb(model, path="tmp_quant"):
+def get_model_size_kb(model, path="models/tmp_quant"):
     save_model(model, path)
     size = os.path.getsize(path + ".npz") / 1024
     os.remove(path + ".npz")
@@ -192,6 +192,23 @@ def print_comparison(orig, quant, fp32_kb, int8_kb, log):
 def main(args):
     log = Logger("person4")
 
+    # Check model file exists before doing anything
+    model_path = args.model_path if args.model_path.endswith(".npz")                  else args.model_path + ".npz"
+    if not os.path.exists(model_path):
+        log("=" * 60)
+        log("  ERROR — No trained model found!")
+        log("=" * 60)
+        log(f"  Expected file: {model_path}")
+        log("")
+        log("  Person 4 needs a trained model from Person 2 first.")
+        log("  Run this command to train one:")
+        log("")
+        log(f"    python person2_train.py --data_dir {args.data_dir} --epochs 3 --max_per_class 50")
+        log("")
+        log("  Then re-run person4_quantization.py.")
+        log.close()
+        return
+
     X_test, y_test, classes = load_dataset(
         args.data_dir, "Test", max_per_class=args.max_per_class
     )
@@ -229,6 +246,7 @@ def main(args):
 
     quantized_stats = {"acc": quant_acc, "size": quant_size, "inf": quant_inf}
 
+    os.makedirs(os.path.dirname(args.save_path) or "models", exist_ok=True)
     save_model(model, args.save_path)
     log(f"  ✓ Quantized model saved to '{args.save_path}.npz'")
 
@@ -247,8 +265,8 @@ if __name__ == "__main__":
         description="Post-training quantization of SimpleCNN (from scratch)"
     )
     parser.add_argument("--data_dir",      type=str,  default="./fruits-360")
-    parser.add_argument("--model_path",    type=str,  default="cnn_fruits")
-    parser.add_argument("--save_path",     type=str,  default="cnn_quantized")
+    parser.add_argument("--model_path",    type=str,  default="models/cnn_fruits")
+    parser.add_argument("--save_path",     type=str,  default="models/cnn_quantized")
     parser.add_argument("--batch_size",    type=int,  default=32)
     parser.add_argument("--max_per_class", type=int,  default=None)
     args = parser.parse_args()

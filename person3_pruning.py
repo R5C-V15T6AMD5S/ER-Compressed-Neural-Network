@@ -156,7 +156,7 @@ def fine_tune(model, X_train, y_train, X_test, y_test,
 
 # ─── MODEL SIZE / INFERENCE ───────────────────────────────────────────────────
 
-def get_model_size_kb(model, path="tmp_model"):
+def get_model_size_kb(model, path="models/tmp_model"):
     """Save model and return file size in KB."""
     save_model(model, path)
     size = os.path.getsize(path + ".npz") / 1024
@@ -200,6 +200,23 @@ def print_comparison(orig, comp, strategy, amount, log):
 
 def main(args):
     log = Logger("person3")
+
+    # Check model file exists before doing anything
+    model_path = args.model_path if args.model_path.endswith(".npz")                  else args.model_path + ".npz"
+    if not os.path.exists(model_path):
+        log("=" * 57)
+        log("  ERROR — No trained model found!")
+        log("=" * 57)
+        log(f"  Expected file: {model_path}")
+        log("")
+        log("  Person 3 needs a trained model from Person 2 first.")
+        log("  Run this command to train one:")
+        log("")
+        log(f"    python person2_train.py --data_dir {args.data_dir} --epochs 3 --max_per_class 50")
+        log("")
+        log("  Then re-run person3_pruning.py.")
+        log.close()
+        return
 
     X_train, y_train, classes = load_dataset(
         args.data_dir, "Training", max_per_class=args.max_per_class
@@ -250,6 +267,7 @@ def main(args):
     pruned_stats = {"acc": pruned_acc, "size": pruned_size,
                     "inf": pruned_inf, "sparsity": pruned_sparsity}
 
+    os.makedirs(os.path.dirname(args.save_path) or "models", exist_ok=True)
     save_model(model, args.save_path)
 
     print_comparison(original_stats, pruned_stats, args.strategy, args.amount, log)
@@ -259,8 +277,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prune SimpleCNN (from scratch)")
     parser.add_argument("--data_dir",        type=str,   default="./fruits-360")
-    parser.add_argument("--model_path",      type=str,   default="cnn_fruits")
-    parser.add_argument("--save_path",       type=str,   default="cnn_pruned")
+    parser.add_argument("--model_path",      type=str,   default="models/cnn_fruits")
+    parser.add_argument("--save_path",       type=str,   default="models/cnn_pruned")
     parser.add_argument("--strategy",        type=str,   default="global",
                         choices=["global", "per_layer"])
     parser.add_argument("--amount",          type=float, default=0.5)

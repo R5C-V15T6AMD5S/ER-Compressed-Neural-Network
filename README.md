@@ -77,7 +77,10 @@ project-root/
 │   ├── person2_20260522_1435.txt
 │   └── ...
 │
-└── cnn_fruits.npz          ← Saved model weights (created after training)
+└── models/                 ← Auto-created on first run, all .npz files saved here
+    ├── cnn_fruits.npz          ← trained model (Person 2)
+    ├── cnn_pruned.npz           ← pruned model (Person 3)
+    └── cnn_quantized.npz       ← quantized model (Person 4)
 ```
 
 ---
@@ -217,7 +220,7 @@ python person1_model.py --epochs 5 --num_samples 80 --num_classes 20
 
 **File:** `person2_train.py`  
 **Depends on:** `person1_model.py`, dataset  
-**What it does:** Loads the dataset, trains `SimpleCNN` using SGD with momentum and cross-entropy loss, saves the best model to `cnn_fruits.npz`
+**What it does:** Loads the dataset, trains `SimpleCNN` using SGD with momentum and cross-entropy loss, saves the best model to `models/cnn_fruits.npz`
 
 #### How to test your part
 
@@ -252,13 +255,13 @@ Epoch [  3/3]  Loss: 0.0158  |  Test Accuracy: 70.81%
   RESULTS
 ────────────────────────────────────────────────────
 Best accuracy : 70.81%
-Model saved to: cnn_fruits.npz
+Model saved to: models/cnn_fruits.npz
 ```
 
 **What to look for:**
 - Loss should decrease each epoch
 - Accuracy should increase each epoch
-- `cnn_fruits.npz` should appear in the project folder when done
+- `models/cnn_fruits.npz` should appear in the `models/` folder when done
 
 **All options:**
 
@@ -268,33 +271,33 @@ Model saved to: cnn_fruits.npz
 | `--epochs` | 15 | Training epochs |
 | `--batch_size` | 32 | Images per batch |
 | `--lr` | 0.01 | Learning rate |
-| `--save_path` | `cnn_fruits` | Filename for saved model |
+| `--save_path` | `models/cnn_fruits` | Filename for saved model |
 | `--max_per_class` | None (all) | Limit images per class |
 
-> **Note:** Once this finishes and `cnn_fruits.npz` exists, Person 3 and Person 4 can run their parts.
+> **Note:** Once this finishes and `models/cnn_fruits.npz` exists, Person 3 and Person 4 can run their parts.
 
 ---
 
 ### Person 3 — Pruning
 
 **File:** `person3_pruning.py`  
-**Depends on:** `person1_model.py`, `person2_train.py`, a saved `cnn_fruits.npz` from Person 2  
+**Depends on:** `person1_model.py`, `person2_train.py`, a saved `models/cnn_fruits.npz` from Person 2  
 **What it does:** Loads the trained model, removes the 50% lowest-magnitude weights (sets them to zero), fine-tunes for a few epochs to recover accuracy, then compares results
 
 #### Before you start
 
-You need `cnn_fruits.npz` to exist in the project folder. If it doesn't exist yet, run Person 2's script first:
+You need `models/cnn_fruits.npz` to exist. If it doesn't exist yet, run Person 2's script first:
 
 ```bash
 python person2_train.py --data_dir ./fruits-360-100x100 --epochs 3 --max_per_class 50
 ```
 
-This takes ~15–25 min and creates `cnn_fruits.npz`.
+This takes ~15–25 min and creates `models/cnn_fruits.npz`.
 
 #### How to test your part
 
 ```bash
-python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path cnn_fruits --max_per_class 50
+python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path models/cnn_fruits --max_per_class 50
 ```
 
 Expected output:
@@ -339,7 +342,7 @@ Expected output:
 **If the model file is missing**, the script will tell you exactly what to do:
 ```
   ERROR — No trained model found!
-  Expected file: cnn_fruits.npz
+  Expected file: models/cnn_fruits.npz
 
   Person 3 needs a trained model from Person 2 first.
   Run this command to train one:
@@ -352,8 +355,8 @@ Expected output:
 | Option | Default | What it does |
 |--------|---------|-------------|
 | `--data_dir` | `./fruits-360` | Path to dataset |
-| `--model_path` | `cnn_fruits` | Trained model to load |
-| `--save_path` | `cnn_pruned` | Where to save pruned model |
+| `--model_path` | `models/cnn_fruits` | Trained model to load |
+| `--save_path` | `models/cnn_pruned` | Where to save pruned model |
 | `--strategy` | `global` | `global` or `per_layer` |
 | `--amount` | 0.5 | Fraction of weights to prune |
 | `--finetune_epochs` | 3 | Epochs to fine-tune after pruning |
@@ -363,15 +366,15 @@ Expected output:
 **Try a different pruning amount:**
 ```bash
 # More aggressive — 70% of weights removed
-python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path cnn_fruits --amount 0.7 --max_per_class 50
+python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path models/cnn_fruits --amount 0.7 --max_per_class 50
 
 # Less aggressive — 30% of weights removed
-python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path cnn_fruits --amount 0.3 --max_per_class 50
+python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path models/cnn_fruits --amount 0.3 --max_per_class 50
 ```
 
 **Try per-layer strategy instead of global:**
 ```bash
-python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path cnn_fruits --strategy per_layer --max_per_class 50
+python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path models/cnn_fruits --strategy per_layer --max_per_class 50
 ```
 
 ---
@@ -379,12 +382,12 @@ python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path cnn_fruit
 ### Person 4 — Quantization
 
 **File:** `person4_quantization.py`  
-**Depends on:** `person1_model.py`, `person2_train.py`, a saved `cnn_fruits.npz` from Person 2  
+**Depends on:** `person1_model.py`, `person2_train.py`, a saved `models/cnn_fruits.npz` from Person 2  
 **What it does:** Loads the trained model, converts all weights from FP32 to INT8 using scale `S` and zero-point `Z` (Equations 1–5 from the survey), dequantizes back to FP32, then measures the accuracy impact and theoretical size savings
 
 #### Before you start
 
-You need `cnn_fruits.npz` to exist in the project folder. If it doesn't, run Person 2's script first:
+You need `models/cnn_fruits.npz` to exist. If it doesn't, run Person 2's script first:
 
 ```bash
 python person2_train.py --data_dir ./fruits-360-100x100 --epochs 3 --max_per_class 50
@@ -393,7 +396,7 @@ python person2_train.py --data_dir ./fruits-360-100x100 --epochs 3 --max_per_cla
 #### How to test your part
 
 ```bash
-python person4_quantization.py --data_dir ./fruits-360-100x100 --model_path cnn_fruits --max_per_class 50
+python person4_quantization.py --data_dir ./fruits-360-100x100 --model_path models/cnn_fruits --max_per_class 50
 ```
 
 Expected output:
@@ -447,7 +450,7 @@ Expected output:
 **If the model file is missing**, the script will tell you exactly what to do:
 ```
   ERROR — No trained model found!
-  Expected file: cnn_fruits.npz
+  Expected file: models/cnn_fruits.npz
 
   Person 4 needs a trained model from Person 2 first.
   Run this command to train one:
@@ -460,8 +463,8 @@ Expected output:
 | Option | Default | What it does |
 |--------|---------|-------------|
 | `--data_dir` | `./fruits-360` | Path to dataset |
-| `--model_path` | `cnn_fruits` | Trained model to load |
-| `--save_path` | `cnn_quantized` | Where to save quantized model |
+| `--model_path` | `models/cnn_fruits` | Trained model to load |
+| `--save_path` | `models/cnn_quantized` | Where to save quantized model |
 | `--batch_size` | 32 | Batch size for accuracy evaluation |
 | `--max_per_class` | None (all) | Limit images per class |
 
