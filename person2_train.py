@@ -17,6 +17,7 @@ import argparse
 import numpy as np
 from PIL import Image
 
+from logger import Logger
 from person1_model import SimpleCNN
 
 
@@ -49,8 +50,8 @@ def load_dataset(data_dir, split="Training", img_size=100, max_per_class=None):
             try:
                 img = Image.open(img_path).convert("RGB")
                 img = img.resize((img_size, img_size))
-                arr = np.array(img, dtype=np.float32) / 255.0  # [0, 1]
-                arr = arr.transpose(2, 0, 1)                   # HWC → CHW
+                arr = np.array(img, dtype=np.float32) / 255.0
+                arr = arr.transpose(2, 0, 1)
                 X.append(arr)
                 y.append(class_map[cls])
             except Exception:
@@ -84,14 +85,11 @@ def cross_entropy_loss(probs, labels):
     Returns: scalar loss, gradient w.r.t. probs (batch, num_classes)
     """
     batch_size = len(labels)
-    eps = 1e-9  # prevent log(0)
+    eps = 1e-9
 
-    # Loss: pick the probability of the correct class for each sample
     correct_probs = probs[np.arange(batch_size), labels]
     loss = -np.mean(np.log(correct_probs + eps))
 
-    # Gradient of cross-entropy + softmax combined:
-    # d_loss/d_logits = probs - one_hot(labels)
     d_probs = probs.copy()
     d_probs[np.arange(batch_size), labels] -= 1
     d_probs /= batch_size
@@ -107,16 +105,13 @@ class SGDMomentum:
 
     v = momentum * v - lr * gradient
     weight += v
-
-    This is the standard SGD with momentum update rule.
     """
 
     def __init__(self, model, lr=0.01, momentum=0.9):
         self.lr       = lr
         self.momentum = momentum
-        self.velocity = {}  # stores momentum for each parameter
+        self.velocity = {}
 
-        # Initialise velocity buffers to zero for each trainable layer
         for i, layer in enumerate(model.get_trainable_layers()):
             if hasattr(layer, 'filters'):
                 self.velocity[f"layer{i}_filters"] = np.zeros_like(layer.filters)
@@ -129,7 +124,6 @@ class SGDMomentum:
         """Apply one gradient update step to all trainable layers."""
         for i, layer in enumerate(model.get_trainable_layers()):
             if hasattr(layer, 'filters'):
-                # Conv layer
                 v_f = self.velocity[f"layer{i}_filters"]
                 v_b = self.velocity[f"layer{i}_biases"]
 
@@ -142,7 +136,6 @@ class SGDMomentum:
                 self.velocity[f"layer{i}_filters"] = v_f
                 self.velocity[f"layer{i}_biases"]  = v_b
             else:
-                # FC layer
                 v_w = self.velocity[f"layer{i}_weights"]
                 v_b = self.velocity[f"layer{i}_biases"]
 
@@ -206,62 +199,54 @@ def compute_accuracy(model, X, y, batch_size=32):
 # ─── TRAINING LOOP ────────────────────────────────────────────────────────────
 
 def train(args):
-    # ── Load data ─────────────────────────────────────────────────────────────
-    # max_per_class limits images per class — useful for fast testing
+    log = Logger("person2")
+
     X_train, y_train, classes = load_dataset(
         args.data_dir, "Training", max_per_class=args.max_per_class
     )
-    X_test,  y_test,  _       = load_dataset(
-        args.data_dir, "Test",     max_per_class=args.max_per_class
+    X_test, y_test, _ = load_dataset(
+        args.data_dir, "Test", max_per_class=args.max_per_class
     )
     num_classes = len(classes)
 
-    # ── Build model ───────────────────────────────────────────────────────────
     model     = SimpleCNN(num_classes=num_classes)
     optimizer = SGDMomentum(model, lr=args.lr, momentum=0.9)
 
-    print(f"\n[Model] SimpleCNN — {model.get_param_count():,} parameters")
-    print(f"[Train] {len(X_train)} samples | {args.epochs} epochs | "
-          f"lr={args.lr} | batch={args.batch_size}\n")
+    log(f"[Model] SimpleCNN — {model.get_param_count():,} parameters")
+    log(f"[Train] {len(X_train)} samples | {args.epochs} epochs | "
+        f"lr={args.lr} | batch={args.batch_size}")
+    log("")
 
     best_acc = 0.0
 
     for epoch in range(1, args.epochs + 1):
-        total_loss   = 0.0
-        num_batches  = 0
+        total_loss  = 0.0
+        num_batches = 0
 
         for X_batch, y_batch in get_batches(X_train, y_train, args.batch_size):
-            # Forward pass
             probs = model.forward(X_batch)
-
-            # Compute loss + gradient
             loss, d_probs = cross_entropy_loss(probs, y_batch)
             total_loss   += loss
             num_batches  += 1
-
-            # Backward pass
             model.backward(d_probs)
-
-            # Update weights
             optimizer.step(model)
 
         avg_loss = total_loss / num_batches
-
-        # Evaluate on test set every epoch
         test_acc = compute_accuracy(model, X_test, y_test, args.batch_size)
 
-        print(f"Epoch [{epoch:>3}/{args.epochs}] "
-              f"Loss: {avg_loss:.4f} | Test Accuracy: {test_acc:.2f}%")
+        log(f"Epoch [{epoch:>3}/{args.epochs}] "
+            f"Loss: {avg_loss:.4f} | Test Accuracy: {test_acc:.2f}%")
 
-        # Save best model
         if test_acc > best_acc:
             best_acc = test_acc
             save_model(model, args.save_path)
-            print(f"  ↑ New best! ({best_acc:.2f}%)")
+            log(f"  ↑ New best! ({best_acc:.2f}%)")
 
-    print(f"\n[Done] Best accuracy: {best_acc:.2f}%")
-    print(f"       Model saved to: {args.save_path}.npz")
-    print("       Run person3_pruning.py or person4_quantization.py next.\n")
+    log.section("RESULTS")
+    log(f"Best accuracy : {best_acc:.2f}%")
+    log(f"Model saved to: {args.save_path}.npz")
+    log("Run person3_pruning.py or person4_quantization.py next.")
+    log.close()
 
 
 if __name__ == "__main__":
@@ -271,7 +256,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size",    type=int,   default=32)
     parser.add_argument("--lr",            type=float, default=0.01)
     parser.add_argument("--save_path",     type=str,   default="cnn_fruits")
-    parser.add_argument("--max_per_class", type=int,   default=None,
-                        help="Limit images per class (e.g. 50 for fast testing)")
+    parser.add_argument("--max_per_class", type=int,   default=None)
     args = parser.parse_args()
     train(args)
