@@ -1,0 +1,80 @@
+============================================================
+  Project: CNN Model Compression
+  Person : main
+  Date   : 2026-05-23 09:31:56
+  Log    : ./logs/main_20260523_0931.txt
+============================================================
+
+============================================================
+  CNN Model Compression — Group Project
+  Fruits-360 Dataset | Pure NumPy Implementation
+============================================================
+
+[Data] Loading dataset...
+
+============================================================
+  STEP 1 — Training original CNN (Person 1 + Person 2)
+============================================================
+[Model] SimpleCNN — 1,315,189 parameters
+[Train] 26016 samples | 10 epochs | lr=0.01 | batch=32
+
+  Epoch [  1/10] Loss: 2.4093 | Accuracy: 59.99%
+    ↑ Best model saved (59.99%)
+  Epoch [  2/10] Loss: 0.1165 | Accuracy: 68.10%
+    ↑ Best model saved (68.10%)
+  Epoch [  3/10] Loss: 0.0262 | Accuracy: 70.48%
+    ↑ Best model saved (70.48%)
+  Epoch [  4/10] Loss: 0.0132 | Accuracy: 69.85%
+  Epoch [  5/10] Loss: 0.0081 | Accuracy: 70.52%
+    ↑ Best model saved (70.52%)
+  Epoch [  6/10] Loss: 0.0134 | Accuracy: 70.12%
+  Epoch [  7/10] Loss: 0.0081 | Accuracy: 70.30%
+  Epoch [  8/10] Loss: 0.0054 | Accuracy: 71.74%
+    ↑ Best model saved (71.74%)
+  Epoch [  9/10] Loss: 0.0018 | Accuracy: 71.14%
+  Epoch [ 10/10] Loss: 0.0014 | Accuracy: 71.46%
+
+  ✓ Training done. Best accuracy: 71.74%
+
+============================================================
+  STEP 2 — Pruning (Person 3)
+============================================================
+[Pruning] Strategy: global | Amount: 50%
+  Accuracy before fine-tune: 71.64%
+
+  ✓ Pruning done. Accuracy: 71.62% | Sparsity: 50.0%
+
+============================================================
+  STEP 3 — Quantization (Person 4)
+============================================================
+[Quantization] Applying PTQ: FP32 → INT8 → FP32 (dequant)...
+
+  ✓ Quantization done. Accuracy: 71.70% | Theoretical INT8 size: 1284.0 KB (vs 5135.8 KB FP32)
+
+────────────────────────────────────────────────────────────
+  FINAL SUMMARY
+────────────────────────────────────────────────────────────
+
+╔══════════════════════════════════════════════════════════════════════╗
+║                        FINAL COMPARISON SUMMARY                      ║
+║            SimpleCNN on Fruits-360 — Original vs Compressed          ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Metric                         Original   Pruned (50%)    Quantized  ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Accuracy (%)                      71.74          71.62        71.70  ║
+║  Model Size (KB)                10275.35       10275.35      5139.50  ║
+║  Inference (ms)                    82.43          83.02        70.14  ║
+║  Sparsity (%)                       0.00          50.00         0.00  ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Accuracy Drop                         —          0.12%        0.04%  ║
+║  Speedup                               —          0.99x        1.18x  ║
+║  Theoretical Size Reduction            —              —        75.0%  ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+  Techniques from: 'Model Compression for Deep Neural Networks'
+  Li, Li & Meng, Computers 2023 — Section 2 (Pruning), Section 3 (Quantization)
+
+
+============================================================
+  Log complete: 2026-05-23 13:06:25
+============================================================
