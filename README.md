@@ -60,7 +60,6 @@ project-root/
 ├── person4_quantization.py ← Quantization (Person 4)
 ├── main.py                 ← Full pipeline — runs everything in order
 ├── logger.py               ← Shared logging utility (saves to logs/)
-├── prepare_dataset.py      ← Optional: create a smaller dataset subset
 ├── README.md               ← This file
 │
 ├── fruits-360-100x100/     ← Dataset folder (you provide this)
