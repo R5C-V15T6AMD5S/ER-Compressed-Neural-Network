@@ -4,7 +4,7 @@ PERSON 4's responsibility.
 
 Implements the exact algorithm from the survey paper (Algorithm 1, Section 3):
     Step 1: Find min/max values in weights
-    Step 2: Choose quantization type (symmetric INT8)
+    Step 2: Choose quantization type (symmetric INT8 or asymmetric UINT8)
     Step 3: Calculate scale S and zero-point Z
     Step 4: Quantize FP32 weights → INT8
     Step 5: Dequantize back → FP32 for inference, measure accuracy loss
@@ -12,7 +12,10 @@ Implements the exact algorithm from the survey paper (Algorithm 1, Section 3):
 The math directly mirrors Equations (1)–(5) from the survey.
 
 Usage:
-    python person4_quantization.py --data_dir ./fruits-360 --model_path cnn_fruits
+    python person4_quantization.py --data_dir ./fruits-360-100x100 --model_path models/cnn_fruits
+
+Quick test:
+    python person4_quantization.py --data_dir ./fruits-360-100x100 --model_path models/cnn_fruits --max_per_class 50
 """
 
 import os
@@ -27,20 +30,35 @@ from person2_train import (load_dataset, compute_accuracy,
 
 # ─── QUANTIZATION MATH (directly from the survey, Equations 1–5) ─────────────
 
-def compute_scale_and_zero(r_min, r_max, q_min=-128, q_max=127):
+def compute_scale_and_zero(r_min, r_max, strategy='asymmetric', q_min=-128, q_max=127):
     """
     Compute quantization parameters S (scale) and Z (zero-point).
 
-    From the survey paper:
-        S = (R_max - R_min) / (Q_max - Q_min)    [Equation 1]
+    Symmetric:
+        Z = 0
+        S = max(|R_min|, |R_max|) / Q_max
+
+    Asymmetric:
+        S = (R_max - R_min) / (Q_max - Q_min)     [Equation 1]
         Z = Q_max - R_max / S                     [Equation 2]
     """
-    S = (r_max - r_min) / (q_max - q_min)
-    if S == 0:
-        S = 1e-8
-    Z = q_max - r_max / S
-    Z = int(np.round(np.clip(Z, q_min, q_max)))
-    return float(S), Z
+    if strategy == 'symmetric':
+        S = max(abs(r_min), abs(r_max)) / q_max
+        if S == 0:
+            S = 1e-8
+        Z = 0
+        return float(S), Z
+
+    elif strategy == 'asymmetric':
+        S = (r_max - r_min) / (q_max - q_min)
+        if S == 0:
+            S = 1e-8
+        Z = q_max - r_max / S
+        Z = int(np.round(np.clip(Z, q_min, q_max)))
+        return float(S), Z
+
+    else:
+        raise ValueError(f"Unknown strategy: {strategy}")
 
 
 def quantize(weights, S, Z, q_min=-128, q_max=127):
@@ -64,7 +82,7 @@ def dequantize(Q, S, Z):
 
 # ─── QUANTIZE A FULL LAYER ────────────────────────────────────────────────────
 
-def quantize_layer(layer):
+def quantize_layer(layer, strategy='asymmetric'):
     """
     Quantize a single Conv or FC layer's weights.
     Returns quantization metadata for analysis.
@@ -77,7 +95,7 @@ def quantize_layer(layer):
     r_min = float(w.min())
     r_max = float(w.max())
 
-    S, Z = compute_scale_and_zero(r_min, r_max)
+    S, Z = compute_scale_and_zero(r_min, r_max, strategy=strategy)
 
     w_int8    = quantize(w, S, Z)
     w_dequant = dequantize(w_int8, S, Z)
@@ -90,6 +108,7 @@ def quantize_layer(layer):
     error = np.mean(np.abs(w - w_dequant))
 
     return {
+        "strategy": strategy,
         "r_min":    r_min,
         "r_max":    r_max,
         "S":        S,
@@ -101,12 +120,16 @@ def quantize_layer(layer):
     }
 
 
-def quantize_model(model):
+def quantize_model(model, strategy='asymmetric'):
     """
     Apply post-training quantization to all trainable layers.
     Returns the quantized model and per-layer metadata.
     """
+    if strategy not in ['symmetric', 'asymmetric']:
+        raise ValueError(f"Unknown quantization strategy: {strategy}")
+
     print("\n  [Quantization] Quantizing layers FP32 → INT8 → FP32 (dequant)...")
+    print(f"  Strategy: {strategy.upper()}")
     print(f"  {'Layer':<8} {'Shape':<22} {'S':>10} {'Z':>6} "
           f"{'Avg Error':>12} {'INT8 Range':>14}")
     print("  " + "-" * 76)
@@ -114,7 +137,7 @@ def quantize_model(model):
     metadata = {}
     for i, layer in enumerate(model.get_trainable_layers()):
         layer_type = "Conv" if hasattr(layer, 'filters') else "FC"
-        meta = quantize_layer(layer)
+        meta = quantize_layer(layer, strategy=strategy)
         metadata[i] = meta
 
         shape_str  = str(meta['shape'])
@@ -192,6 +215,10 @@ def print_comparison(orig, quant, fp32_kb, int8_kb, log):
 def main(args):
     log = Logger("person4")
 
+    # Set seed for reproducibility
+    if args.seed is not None:
+        np.random.seed(args.seed)
+
     # Check model file exists before doing anything
     model_path = args.model_path if args.model_path.endswith(".npz")                  else args.model_path + ".npz"
     if not os.path.exists(model_path):
@@ -232,7 +259,7 @@ def main(args):
     log("[Quantization] Applying Algorithm 1 from the survey paper...")
     log("  Steps: min/max → S and Z → Q = R/S + Z → R = (Q-Z)*S")
 
-    model, metadata = quantize_model(model)
+    model, metadata = quantize_model(model, strategy=args.strategy)
 
     log.section("RESULTS")
     quant_acc        = compute_accuracy(model, X_test, y_test, args.batch_size)
@@ -269,5 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_path",     type=str,  default="models/cnn_quantized")
     parser.add_argument("--batch_size",    type=int,  default=32)
     parser.add_argument("--max_per_class", type=int,  default=None)
+    parser.add_argument("--strategy",      type=str,  default="asymmetric", choices=['symmetric', 'asymmetric'])
+    parser.add_argument("--seed",          type=int,  default=None)
     args = parser.parse_args()
     main(args)
