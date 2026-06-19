@@ -1,0 +1,94 @@
+============================================================
+  Project: CNN Model Compression
+  Person : compare
+  Date   : 2026-06-19 11:31:48
+  OS     : Linux (Python 3.14.5)
+  Log    : ./logs/compare_20260619_1131.txt
+============================================================
+
+================================================================
+  V1 vs V2 ARCHITECTURE COMPARISON
+  Person 1 — Milestone 2 contribution
+================================================================
+  Dataset       : ./fruits-360-100x100
+  Max per class : 30
+  Epochs        : 3
+  Batch size    : 32
+  Learning rate : 0.01
+  Seed          : 42
+  Dropout p     : 0.3
+
+[Data] Loading dataset...
+  Train: 7816 images  |  Test: 7806 images  |  Classes: 261
+
+
+================================================================
+  TRAINING V1 — SimpleCNN (original)
+================================================================
+  Parameters : 1,315,189
+  Epochs     : 3  |  lr=0.01  |  batch=32
+
+  V1 Epoch [ 1/3]  Loss: 2.9449  |  Acc: 58.08%  |  283.4s
+  V1 Epoch [ 2/3]  Loss: 0.1930  |  Acc: 66.47%  |  280.5s
+  V1 Epoch [ 3/3]  Loss: 0.0385  |  Acc: 73.58%  |  280.5s
+
+================================================================
+  TRAINING V2 — SimpleCNNv2 (BatchNorm + Dropout + 3rd Conv)
+================================================================
+  Parameters : 629,765
+  Dropout p  : 0.3
+  Epochs     : 3  |  lr=0.01  |  batch=32
+
+  V2 Epoch [ 1/3]  Loss: 5.1679  |  Acc: 7.55%  |  352.5s
+  V2 Epoch [ 2/3]  Loss: 4.1474  |  Acc: 24.35%  |  352.5s
+  V2 Epoch [ 3/3]  Loss: 3.3212  |  Acc: 37.48%  |  352.8s
+
+╔══════════════════════════════════════════════════════════════════════╗
+║                FINAL COMPARISON — V1 vs V2 ARCHITECTURE              ║
+║            Same dataset, same seed, same training settings           ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Metric                              V1 (orig)        V2 (improved)  ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Test accuracy (%)                       73.58                37.48  ║
+║  Best epoch accuracy                     73.58                37.48  ║
+║  Parameters                          1,315,189              629,765  ║
+║  Model size (KB)                     10,275.60             4,920.23  ║
+║  Inference (ms/image)                    82.22                88.28  ║
+║  Total train time (s)                   844.43             1,057.82  ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Accuracy change                                            -36.10%  ║
+║  Parameter change                                            -52.1%  ║
+║  Size change                                                 -52.1%  ║
+║  Inference change                                             +7.4%  ║
+║  Train time change                                           +25.3%  ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+──────────────────────────────────────────────────────────────────────
+  CONCLUSION
+──────────────────────────────────────────────────────────────────────
+  ✗ V2 is WORSE on test accuracy (-36.10%)
+  ✓ V2 has FEWER parameters (-52.1%)
+
+──────────────────────────────────────────────────────────────────────
+  LAYER-BY-LAYER PARAMETER BREAKDOWN
+──────────────────────────────────────────────────────────────────────
+
+  V1 — SimpleCNN (1,315,189 params)
+    idx  type   shape                          params
+    0    Conv   (8, 3, 3, 3)                      224
+    1    Conv   (16, 8, 3, 3)                   1,168
+    2    FC     (10000, 128)                1,280,128
+    3    FC     (128, 261)                     33,669
+
+  V2 — SimpleCNNv2 (629,765 params total, incl. BatchNorm)
+    idx  type   shape                          params
+    0    Conv   (8, 3, 3, 3)                      224
+    1    Conv   (16, 8, 3, 3)                   1,168
+    2    Conv   (32, 16, 3, 3)                  4,640
+    3    FC     (4608, 128)                   589,952
+    4    FC     (128, 261)                     33,669
+
+
+============================================================
+  Log complete: 2026-06-19 12:06:31
+============================================================
