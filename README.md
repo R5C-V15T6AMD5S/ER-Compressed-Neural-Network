@@ -16,6 +16,7 @@ Based on the survey paper:
 5. [Quick Start — Full Pipeline](#quick-start--full-pipeline)
 6. [Per-Person Tutorials](#per-person-tutorials)
    - [Person 1 — CNN Architecture](#person-1--cnn-architecture)
+   - [Person 1 V2 — Improved Architecture (Milestone 2)](#person-1-v2--improved-architecture-milestone-2)
    - [Person 2 — Training](#person-2--training)
    - [Person 3 — Pruning](#person-3--pruning)
    - [Person 4 — Quantization](#person-4--quantization)
@@ -34,6 +35,7 @@ Trains a CNN from scratch (no PyTorch, no TensorFlow — only NumPy) on the Frui
 | Step | Who | File | What |
 |------|-----|------|------|
 | 1 | Person 1 | `person1_model.py` | CNN architecture — layers, forward, backward |
+| 1b | Person 1 (KT2) | `person1_model_v2.py` | Improved V2 architecture — BatchNorm + Dropout + 3rd Conv |
 | 2 | Person 2 | `person2_train.py` | Training loop, loss function, optimizer, save/load |
 | 3 | Person 3 | `person3_pruning.py` | Weight pruning — removes 50% of weights |
 | 4 | Person 4 | `person4_quantization.py` | Post-training quantization — FP32 → INT8 |
@@ -54,7 +56,9 @@ Person 1 and Person 2 are fully independent. Person 3 and 4 need a trained model
 ```
 project-root/
 │
-├── person1_model.py        ← CNN architecture (Person 1)
+├── person1_model.py        ← CNN architecture V1 (Person 1)
+├── person1_model_v2.py     ← CNN architecture V2 with BatchNorm + Dropout (Person 1, KT2)
+├── compare_models.py       ← Compare V1 vs V2 side-by-side (Person 1, KT2)
 ├── person2_train.py        ← Training loop + optimizer (Person 2)
 ├── person3_pruning.py      ← Weight pruning (Person 3)
 ├── person4_quantization.py ← Quantization (Person 4)
@@ -212,6 +216,164 @@ python person1_model.py --epochs 5 --num_samples 80 --num_classes 20
 | `--batch_size` | 4 | Images per batch |
 | `--num_classes` | 10 | Number of fake output classes |
 | `--num_samples` | 40 | Number of fake training images |
+
+---
+
+### Person 1 V2 — Improved Architecture (Milestone 2)
+
+**Files:** `person1_model_v2.py`, `compare_models.py`
+**Depends on:** `person1_model.py` (reuses ConvLayer, ReLULayer, MaxPoolLayer, FlattenLayer, FCLayer, SoftmaxLayer), `person2_train.py` (for training utilities), dataset
+**What it does:** Introduces an improved `SimpleCNNv2` architecture and a script to compare it against the original V1 baseline under identical conditions.
+
+#### What changed vs V1
+
+Three concrete improvements designed to reduce overfitting (V1's training accuracy was ~99% while test accuracy plateaued at ~70%):
+
+1. **BatchNorm after every Conv layer** — stabilizes activations during training, acts as mild regularization
+2. **Dropout (p=0.3) after FC1** — randomly drops 30% of FC1 outputs during training, prevents memorization
+3. **Third Conv block (16→32 filters)** with extra MaxPool — reduces spatial dimensions from 25→12, shrinking FC1 input from 10 000 to 4 608 features
+
+**Architecture comparison:**
+
+```
+V1 (original)                          V2 (improved)
+─────────────                          ──────────────
+Conv(3→8) → ReLU → MaxPool             Conv(3→8)  → BN → ReLU → MaxPool
+Conv(8→16) → ReLU → MaxPool            Conv(8→16) → BN → ReLU → MaxPool
+                                       Conv(16→32) → BN → ReLU → MaxPool  ← NEW
+Flatten (10 000)                       Flatten (4 608)
+FC(10000→128) → ReLU                   FC(4608→128) → ReLU → Dropout(0.3)
+FC(128→261)                            FC(128→261)
+Softmax                                Softmax
+
+~1.32M parameters                      ~630K parameters (~52% smaller)
+```
+
+#### Compatibility with the rest of the team — IMPORTANT
+
+V2 keeps the **exact same public interface as V1**:
+
+- `model.forward(X)` → softmax probabilities
+- `model.backward(d_probs)` → populates gradients
+- `model.get_trainable_layers()` → list of ConvLayer / FCLayer only
+- `model.get_param_count()` → integer
+
+This means **Person 2's training loop, Person 3's pruning, and Person 4's quantization work on V2 without any code changes**. You only need to swap the import:
+
+```python
+# Old (V1)
+from person1_model import SimpleCNN
+model = SimpleCNN(num_classes=261)
+
+# New (V2)
+from person1_model_v2 import SimpleCNNv2
+model = SimpleCNNv2(num_classes=261)
+```
+
+Everything else stays identical — your optimizer iterates over `get_trainable_layers()`, your pruning checks `hasattr(layer, "filters")`, your quantization reads `layer.filters`/`layer.weights`. None of that changes.
+
+#### BatchNorm parameter handling (additional info)
+
+V2 has BatchNorm gamma/beta parameters that are NOT returned by `get_trainable_layers()` — this is intentional, otherwise Person 2's optimizer would try to treat them like Conv/FC weights and crash. Instead, V2 manages them internally with its own SGD-with-momentum step inside `model.backward()`.
+
+These BN parameters need to be saved/loaded separately from the main `.npz`:
+
+```python
+# Saving — call BOTH
+save_model(model, "models/v2_best", classes=classes)   # Person 2's save_model
+model.save_bn_params("models/v2_best")                 # writes models/v2_best_bn.npz
+
+# Loading — call BOTH
+load_model(model, "models/v2_best")
+model.load_bn_params("models/v2_best")
+model.eval()   # important — switches BN to use running stats, Dropout to identity
+```
+
+If Person 3 or Person 4 wants to prune/quantize a V2 model, they need to call `model.load_bn_params(...)` and `model.eval()` after loading. Otherwise BatchNorm uses default identity stats and accuracy will be near-random.
+
+#### How to test your part — standalone (no dataset needed)
+
+```bash
+python person1_model_v2.py
+```
+
+Generates fake data, runs forward + backward, trains for 3 epochs, confirms loss decreases. Takes ~90 seconds.
+
+#### How to run the V1 vs V2 comparison
+
+The `compare_models.py` script trains BOTH architectures under identical conditions (same seed, same data, same hyperparameters) and prints a side-by-side comparison.
+
+**Quick smoke test (~25 minutes total):**
+
+```bash
+python compare_models.py --data_dir ./fruits-360-100x100 --epochs 3 --max_per_class 30
+```
+
+**Full run (~5-6 hours total — V1 ≈ 2.5h, V2 ≈ 3h):**
+
+```bash
+python compare_models.py --data_dir ./fruits-360-100x100 --epochs 10 --max_per_class 100
+```
+
+**All options:**
+
+| Option | Default | What it does |
+|--------|---------|-------------|
+| `--data_dir` | `./fruits-360-100x100` | Path to dataset |
+| `--max_per_class` | 100 | Limit images per class |
+| `--epochs` | 10 | Training epochs for both V1 and V2 |
+| `--batch_size` | 32 | Batch size |
+| `--lr` | 0.01 | Learning rate (used for both) |
+| `--seed` | 42 | Random seed (used for both — guarantees same data shuffle) |
+| `--dropout_p` | 0.3 | Dropout probability for V2 only |
+
+#### Output files after a comparison run
+
+```
+logs/
+└── compare_20260619_HHMM.txt        ← side-by-side comparison log
+
+models/
+├── v1_best.npz                       ← best V1 weights
+├── v2_best.npz                       ← best V2 weights (Conv/FC)
+└── v2_best_bn.npz                    ← V2 BatchNorm parameters
+```
+
+#### Using V2 with Person 3 and Person 4 (for KT2 combined pipeline)
+
+If a teammate wants to apply pruning or quantization to V2 instead of V1, the minimal change is the import + BN load/eval calls. For example, Person 3's main code would become:
+
+```python
+from person1_model_v2 import SimpleCNNv2
+
+# Instead of: model = SimpleCNN(num_classes=num_classes)
+model = SimpleCNNv2(num_classes=num_classes)
+load_model(model, "models/v2_best")
+model.load_bn_params("models/v2_best")
+model.eval()
+
+# Everything else stays the same — global_prune() and apply_masks() iterate
+# over get_trainable_layers() which only returns Conv/FC layers, same as V1.
+masks = prune_model(model, "global", 0.5)
+```
+
+Same idea for Person 4 — only the model creation and BN-load lines change.
+
+#### Why these specific changes (and not others)
+
+The V1 baseline showed clear overfitting (~30 percentage point train-test gap). The standard solutions are:
+
+- **More data / augmentation** — out of scope (no time for new dataset work)
+- **More regularization** — what we did (Dropout + BatchNorm)
+- **Smaller model** — partial side effect (FC1 shrunk because of extra pool)
+
+We did **not** simply add more filters or more layers because that would make overfitting worse, not better.
+
+#### What to expect from the comparison
+
+Based on the seminar paper [1], BatchNorm + Dropout typically need more epochs to converge than a vanilla CNN, because they slow down memorization by design. In our 3-epoch smoke test V2 was still catching up to V1; in the full 10-epoch run V2 should close most of the gap while remaining ~52% smaller.
+
+Even if V2's final accuracy is slightly below V1's, the comparison itself is the contribution — V2 is a methodologically clean experiment in the direction the seminar paper recommends (combining architectural design with model compression).
 
 ---
 
