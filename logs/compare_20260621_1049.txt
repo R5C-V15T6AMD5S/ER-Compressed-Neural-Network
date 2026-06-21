@@ -1,0 +1,108 @@
+============================================================
+  Project: CNN Model Compression
+  Person : compare
+  Date   : 2026-06-21 10:49:19
+  OS     : Linux (Python 3.14.6)
+  Log    : ./logs/compare_20260621_1049.txt
+============================================================
+
+================================================================
+  V1 vs V2 ARCHITECTURE COMPARISON
+  Person 1 — Milestone 2 contribution
+================================================================
+  Dataset       : ./fruits-360-100x100
+  Max per class : 100
+  Epochs        : 10
+  Batch size    : 32
+  Learning rate : 0.01
+  Seed          : 42
+  Dropout p     : 0.3
+
+[Data] Loading dataset...
+  Train: 26016 images  |  Test: 25244 images  |  Classes: 261
+
+
+================================================================
+  TRAINING V1 — SimpleCNN (original)
+================================================================
+  Parameters : 1,315,189
+  Epochs     : 10  |  lr=0.01  |  batch=32
+
+  V1 Epoch [ 1/10]  Loss: 1.2254  |  Acc: 69.64%  |  922.1s
+  V1 Epoch [ 2/10]  Loss: 0.0319  |  Acc: 70.14%  |  924.2s
+  V1 Epoch [ 3/10]  Loss: 0.0132  |  Acc: 71.87%  |  924.5s
+  V1 Epoch [ 4/10]  Loss: 0.0058  |  Acc: 72.05%  |  924.6s
+  V1 Epoch [ 5/10]  Loss: 0.0044  |  Acc: 72.05%  |  924.1s
+  V1 Epoch [ 6/10]  Loss: 0.0027  |  Acc: 72.30%  |  925.9s
+  V1 Epoch [ 7/10]  Loss: 0.0014  |  Acc: 71.68%  |  925.5s
+  V1 Epoch [ 8/10]  Loss: 0.0017  |  Acc: 71.88%  |  928.2s
+  V1 Epoch [ 9/10]  Loss: 0.0017  |  Acc: 71.94%  |  924.3s
+  V1 Epoch [10/10]  Loss: 0.0006  |  Acc: 71.64%  |  924.9s
+
+================================================================
+  TRAINING V2 — SimpleCNNv2 (BatchNorm + Dropout + 3rd Conv)
+================================================================
+  Parameters : 629,765
+  Dropout p  : 0.3
+  Epochs     : 10  |  lr=0.01  |  batch=32
+
+  V2 Epoch [ 1/10]  Loss: 5.0362  |  Acc: 9.35%  |  1163.4s
+  V2 Epoch [ 2/10]  Loss: 3.2715  |  Acc: 48.32%  |  1164.3s
+  V2 Epoch [ 3/10]  Loss: 1.6533  |  Acc: 62.85%  |  1164.9s
+  V2 Epoch [ 4/10]  Loss: 0.9093  |  Acc: 72.60%  |  1155.1s
+  V2 Epoch [ 5/10]  Loss: 0.5868  |  Acc: 73.47%  |  1153.3s
+  V2 Epoch [ 6/10]  Loss: 0.4127  |  Acc: 75.53%  |  1159.5s
+  V2 Epoch [ 7/10]  Loss: 0.3103  |  Acc: 75.83%  |  1282.9s
+  V2 Epoch [ 8/10]  Loss: 0.2333  |  Acc: 76.49%  |  1195.8s
+  V2 Epoch [ 9/10]  Loss: 0.1874  |  Acc: 75.83%  |  1154.8s
+  V2 Epoch [10/10]  Loss: 0.1530  |  Acc: 77.55%  |  1153.8s
+
+╔══════════════════════════════════════════════════════════════════════╗
+║                FINAL COMPARISON — V1 vs V2 ARCHITECTURE              ║
+║            Same dataset, same seed, same training settings           ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Metric                              V1 (orig)        V2 (improved)  ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Test accuracy (%)                       72.30                77.55  ║
+║  Best epoch accuracy                     72.30                77.55  ║
+║  Parameters                          1,315,189              629,765  ║
+║  Model size (KB)                     10,275.60             4,920.23  ║
+║  Inference (ms/image)                    82.30                89.14  ║
+║  Total train time (s)                 9,248.51            11,748.15  ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Accuracy change                                             +5.25%  ║
+║  Parameter change                                            -52.1%  ║
+║  Size change                                                 -52.1%  ║
+║  Inference change                                             +8.3%  ║
+║  Train time change                                           +27.0%  ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+──────────────────────────────────────────────────────────────────────
+  CONCLUSION
+──────────────────────────────────────────────────────────────────────
+  ✓ V2 IS BETTER on test accuracy (+5.25%)
+  ✓ V2 has FEWER parameters (-52.1%)
+
+──────────────────────────────────────────────────────────────────────
+  LAYER-BY-LAYER PARAMETER BREAKDOWN
+──────────────────────────────────────────────────────────────────────
+
+  V1 — SimpleCNN (1,315,189 params)
+    idx  type   shape                          params
+    0    Conv   (8, 3, 3, 3)                      224
+    1    Conv   (16, 8, 3, 3)                   1,168
+    2    FC     (10000, 128)                1,280,128
+    3    FC     (128, 261)                     33,669
+
+  V2 — SimpleCNNv2 (629,765 params total, incl. BatchNorm)
+    idx  type   shape                          params
+    0    Conv   (8, 3, 3, 3)                      224
+    1    Conv   (16, 8, 3, 3)                   1,168
+    2    Conv   (32, 16, 3, 3)                  4,640
+    3    FC     (4608, 128)                   589,952
+    4    FC     (128, 261)                     33,669
+
+
+============================================================
+  Log complete: 2026-06-21 16:48:24
+============================================================
