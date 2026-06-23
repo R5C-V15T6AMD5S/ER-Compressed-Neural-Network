@@ -18,6 +18,7 @@ Based on the survey paper:
    - [Person 1 — CNN Architecture](#person-1--cnn-architecture)
    - [Person 1 V2 — Improved Architecture (Milestone 2)](#person-1-v2--improved-architecture-milestone-2)
    - [Person 2 — Training](#person-2--training)
+   - [Person 2 V2 — Quantization-Aware Training (Milestone 2)](#person-2-v2--quantization-aware-training-milestone-2)
    - [Person 3 — Pruning](#person-3--pruning)
    - [Person 3 V2 — Dynamic Pruning on SimpleCNNv2 (Milestone 2)](#person-3-v2--dynamic-pruning-on-simplecnnv2-milestone-2)
    - [Person 4 — Quantization](#person-4--quantization)
@@ -38,6 +39,7 @@ Trains a CNN from scratch (no PyTorch, no TensorFlow — only NumPy) on the Frui
 | 1 | Person 1 | `person1_model.py` | CNN architecture — layers, forward, backward |
 | 1b | Person 1 (KT2) | `person1_model_v2.py` | Improved V2 architecture — BatchNorm + Dropout + 3rd Conv |
 | 2 | Person 2 | `person2_train.py` | Training loop, loss function, optimizer, save/load |
+| 2b | Person 2 (KT2) | `person2_train_v2.py` | Training + Quantization-Aware Training (QAT) |
 | 3 | Person 3 | `person3_pruning.py` | Weight pruning — removes 50% of weights (post-training) |
 | 3b | Person 3 (KT2) | `person3_dynamic_pruning.py` | Dynamic pruning during training on V2 model |
 | 4 | Person 4 | `person4_quantization.py` | Post-training quantization — FP32 → INT8 |
@@ -62,6 +64,7 @@ project-root/
 ├── person1_model_v2.py     ← CNN architecture V2 with BatchNorm + Dropout (Person 1, KT2)
 ├── compare_models.py       ← Compare V1 vs V2 side-by-side (Person 1, KT2)
 ├── person2_train.py        ← Training loop + optimizer (Person 2)
+├── person2_train_v2.py     ← Training + Quantization-Aware Training (Person 2, KT2)
 ├── person3_pruning.py            ← Weight pruning V1 — train→prune→fine-tune (Person 3)
 ├── person3_dynamic_pruning.py    ← Dynamic pruning during training on V2 (Person 3, KT2)
 ├── person4_quantization.py       ← Quantization (Person 4)
@@ -442,6 +445,106 @@ Model saved to: models/cnn_fruits.npz
 
 ---
 
+
+### Person 2 V2 — Quantization-Aware Training (Milestone 2)
+
+**File:** `person2_train_v2.py`
+**Depends on:** `person1_model.py` (V1), `logger.py`, dataset
+**What it does:** Same training pipeline as the original `person2_train.py`, plus an **optional QAT (Quantization-Aware Training)** mode. During training, weights are periodically "fake quantized" — rounded to the INT8 grid and immediately dequantized back to FP32. The model learns to be robust to the precision loss that will happen later when Person 4 applies real INT8 quantization.
+
+#### Why QAT is better than plain PTQ
+
+| Pipeline | Accuracy after INT8 quantization |
+|---|---|
+| Train FP32 → PTQ (Person 4 only) | Some accuracy drop |
+| Train FP32 with QAT → PTQ (Person 2 V2 + Person 4) | **Much smaller drop** |
+
+The model "knows" during training that its weights will eventually be discretized to 256 INT8 levels, so it learns weight values that survive that rounding well. This is the approach described in **Section 3.1 of the seminar paper** [1].
+
+#### How it works (under the hood)
+
+For each Conv/FC layer, on every Nth batch:
+1. Find the min/max of the weight tensor (or use a symmetric scheme)
+2. Compute scale `S` and zero-point `Z` (same math as Person 4's PTQ — equations 1–4 in the seminar)
+3. Round the weights to the INT8 grid: `q = round(w/S + Z)`, clipped to [-128, 127]
+4. Dequantize back: `w_fake = (q - Z) * S`
+5. Replace the layer's weights with `w_fake`
+
+The result has dtype float32 but its values can only land on the discrete INT8 grid. The rest of the training continues as normal — backprop, optimizer step, etc.
+
+#### How to test your part — quick technical sanity check
+
+Baseline (no QAT, like the original training):
+
+```bash
+python person2_train_v2.py --data_dir ./fruits-360-100x100 \
+                              --epochs 1 \
+                              --max_per_class 5 \
+                              --batch_size 4
+```
+
+With QAT enabled:
+
+```bash
+python person2_train_v2.py --data_dir ./fruits-360-100x100 \
+                              --epochs 1 \
+                              --max_per_class 5 \
+                              --batch_size 4 \
+                              --qat
+```
+
+#### Full QAT training run
+
+```bash
+python person2_train_v2.py --data_dir ./fruits-360-100x100 \
+                              --epochs 10 \
+                              --max_per_class 100 \
+                              --qat \
+                              --qat_warmup_epochs 1 \
+                              --qat_frequency 1
+```
+
+#### QAT-specific options
+
+| Option | Default | What it does |
+|--------|---------|-------------|
+| `--qat` | off | Enable fake quantization during training |
+| `--qat_strategy` | asymmetric | `symmetric` or `asymmetric` quantization |
+| `--qat_bits` | 8 | Bits for fake quantization (8 = INT8) |
+| `--qat_warmup_epochs` | 0 | Train initial epochs as FP32 only (helps stability) |
+| `--qat_frequency` | 1 | Fake-quantize every Nth batch (1 = every batch) |
+
+#### Output files
+
+```
+models/
+└── cnn_fruits_qat.npz        ← model trained with QAT (when --qat is on)
+
+logs/
+└── person2_TIMESTAMP.txt      ← training log with per-epoch QAT error
+```
+
+#### Using a QAT-trained model with Person 4's quantization
+
+The QAT model is saved like any other model — Person 4's existing quantization script can load it directly:
+
+```bash
+python person4_quantization.py --data_dir ./fruits-360-100x100 \
+                                  --model_path models/cnn_fruits_qat \
+                                  --max_per_class 100
+```
+
+The interesting comparison is **two PTQ results side-by-side**:
+- Person 4 quantizing `models/cnn_fruits` (baseline FP32 training) → some accuracy drop
+- Person 4 quantizing `models/cnn_fruits_qat` (QAT-trained) → smaller accuracy drop
+
+That comparison is a strong KT2 result: it directly demonstrates the benefit of QAT predicted by the seminar.
+
+#### Note on V1 vs V2 compatibility
+
+The current `person2_train_v2.py` imports V1 (`from person1_model import SimpleCNN`). To use Borna's QAT on the V2 architecture, the import would need to change to `from person1_model_v2 import SimpleCNNv2` plus a `model.load_bn_params(...)` / `model.eval()` call where appropriate. This is a small change (a few lines) and can be done if the team decides to combine V2 + QAT for the final pipeline.
+
+---
 ### Person 3 — Pruning
 
 **File:** `person3_pruning.py`  
