@@ -19,6 +19,7 @@ Based on the survey paper:
    - [Person 1 V2 — Improved Architecture (Milestone 2)](#person-1-v2--improved-architecture-milestone-2)
    - [Person 2 — Training](#person-2--training)
    - [Person 3 — Pruning](#person-3--pruning)
+   - [Person 3 V2 — Dynamic Pruning on SimpleCNNv2 (Milestone 2)](#person-3-v2--dynamic-pruning-on-simplecnnv2-milestone-2)
    - [Person 4 — Quantization](#person-4--quantization)
 7. [Output and Logs](#output-and-logs)
 8. [Architecture Details](#architecture--simplecnn)
@@ -37,7 +38,8 @@ Trains a CNN from scratch (no PyTorch, no TensorFlow — only NumPy) on the Frui
 | 1 | Person 1 | `person1_model.py` | CNN architecture — layers, forward, backward |
 | 1b | Person 1 (KT2) | `person1_model_v2.py` | Improved V2 architecture — BatchNorm + Dropout + 3rd Conv |
 | 2 | Person 2 | `person2_train.py` | Training loop, loss function, optimizer, save/load |
-| 3 | Person 3 | `person3_pruning.py` | Weight pruning — removes 50% of weights |
+| 3 | Person 3 | `person3_pruning.py` | Weight pruning — removes 50% of weights (post-training) |
+| 3b | Person 3 (KT2) | `person3_dynamic_pruning.py` | Dynamic pruning during training on V2 model |
 | 4 | Person 4 | `person4_quantization.py` | Post-training quantization — FP32 → INT8 |
 
 The full pipeline runs in one command via `main.py` and automatically saves a timestamped log to the `logs/` folder.
@@ -60,8 +62,9 @@ project-root/
 ├── person1_model_v2.py     ← CNN architecture V2 with BatchNorm + Dropout (Person 1, KT2)
 ├── compare_models.py       ← Compare V1 vs V2 side-by-side (Person 1, KT2)
 ├── person2_train.py        ← Training loop + optimizer (Person 2)
-├── person3_pruning.py      ← Weight pruning (Person 3)
-├── person4_quantization.py ← Quantization (Person 4)
+├── person3_pruning.py            ← Weight pruning V1 — train→prune→fine-tune (Person 3)
+├── person3_dynamic_pruning.py    ← Dynamic pruning during training on V2 (Person 3, KT2)
+├── person4_quantization.py       ← Quantization (Person 4)
 ├── main.py                 ← Full pipeline — runs everything in order
 ├── logger.py               ← Shared logging utility (saves to logs/)
 ├── README.md               ← This file
@@ -540,6 +543,114 @@ python person3_pruning.py --data_dir ./fruits-360-100x100 --model_path models/cn
 
 ---
 
+
+### Person 3 V2 — Dynamic Pruning on SimpleCNNv2 (Milestone 2)
+
+**File:** `person3_dynamic_pruning.py`
+**Depends on:** `person1_model_v2.py` (V2 architecture), `logger.py`, dataset
+**What it does:** Trains Person 1's V2 model **while gradually pruning weights at the same time** — a single integrated training+pruning pipeline, instead of the original "train fully, then prune, then fine-tune" approach.
+
+#### How it differs from the original `person3_pruning.py`
+
+| Aspect | Original (`person3_pruning.py`) | V2 (`person3_dynamic_pruning.py`) |
+|---|---|---|
+| Pruning timing | After full training | **Gradually during training** |
+| Sparsity schedule | One step, 0% → 50% | **Smooth ramp** from epoch 2 to last epoch |
+| Model architecture | V1 (SimpleCNN) | **V2 (SimpleCNNv2)** with BatchNorm + Dropout |
+| Requires Borna's pre-trained model | Yes | **No** — runs end-to-end on its own |
+| Output | Pruned model + masks | Pruned V2 model + BN params + masks |
+
+#### Why dynamic pruning is better
+
+The model has more chances to **adapt to missing weights** as they get pruned, instead of suddenly losing 50% of weights all at once and trying to recover. This typically gives **better accuracy at the same sparsity level**.
+
+#### How to test your part — standalone
+
+```bash
+python person3_dynamic_pruning.py --data_dir ./fruits-360-100x100 \
+                                    --epochs 5 \
+                                    --max_per_class 30 \
+                                    --amount 0.5
+```
+
+#### Full run
+
+```bash
+python person3_dynamic_pruning.py --data_dir ./fruits-360-100x100 \
+                                    --epochs 15 \
+                                    --max_per_class 100 \
+                                    --amount 0.5 \
+                                    --strategy global \
+                                    --prune_start_epoch 2 \
+                                    --prune_frequency 10
+```
+
+#### All options
+
+| Option | Default | What it does |
+|--------|---------|-------------|
+| `--data_dir` | `./fruits-360-100x100` | Path to dataset |
+| `--epochs` | 15 | Training epochs |
+| `--batch_size` | 32 | Batch size |
+| `--lr` | 0.01 | Learning rate |
+| `--momentum` | 0.9 | SGD momentum |
+| `--amount` | 0.5 | Final target sparsity (0.5 = 50%) |
+| `--strategy` | global | `global` or `per_layer` |
+| `--prune_start_epoch` | 2 | Epoch where pruning begins |
+| `--prune_end_epoch` | None | Last pruning epoch (defaults to `--epochs`) |
+| `--prune_frequency` | 10 | Update masks every N batches |
+| `--dropout_p` | 0.3 | Dropout for V2 |
+| `--max_per_class` | None | Image limit per class (quick tests) |
+| `--save_path` | `models/cnn_dynamic_pruned` | Where to save the model |
+| `--mask_path` | `models/dynamic_pruning_masks` | Where to save masks |
+
+#### Output files
+
+```
+models/
+├── cnn_dynamic_pruned.npz          ← Conv/FC weights (best epoch)
+├── cnn_dynamic_pruned_bn.npz       ← BatchNorm gamma/beta + running stats
+└── dynamic_pruning_masks.npz       ← Binary pruning masks per layer
+
+logs/
+└── person3_dynamic_pruning_TIMESTAMP.txt    ← full run log
+```
+
+#### Using the dynamically pruned V2 model with Person 4's quantization
+
+This is the **combined KT2 pipeline** — V2 architecture, dynamically pruned, then quantized. The pruned model is saved exactly like any other V2 model, so Person 4 can load it with just the standard V2 loading sequence:
+
+```python
+# Inside Person 4's quantization script
+from person1_model_v2 import SimpleCNNv2
+from person2_train import load_model, compute_accuracy
+
+# Load the dynamically pruned V2 model (not the original V2)
+model = SimpleCNNv2(num_classes=num_classes)
+load_model(model, "models/cnn_dynamic_pruned")
+model.load_bn_params("models/cnn_dynamic_pruned")
+model.eval()   # IMPORTANT: switches BatchNorm to running stats, Dropout off
+
+# Now apply existing quantization — no changes needed
+model, metadata = quantize_model(model, strategy="asymmetric")
+acc = compute_accuracy(model, X_test, y_test, batch_size=32)
+```
+
+**Important:** Person 4 must call `model.load_bn_params(...)` AND `model.eval()` — otherwise BatchNorm uses default identity statistics and accuracy drops to near-random.
+
+The end-to-end combined pipeline would then look like:
+
+```
+V2 architecture (Person 1)
+        ↓
+Dynamic pruning during training (Person 3 V2) → cnn_dynamic_pruned.npz (sparse + V2)
+        ↓
+Post-training INT8 quantization (Person 4)    → fully compressed model
+```
+
+Expected stacked compression: **~52% from V2** × **~50% from pruning** × **~75% from quantization (INT8 vs FP32)** = a model many times smaller than the original V1 baseline.
+
+---
 ### Person 4 — Quantization
 
 **File:** `person4_quantization.py`  
