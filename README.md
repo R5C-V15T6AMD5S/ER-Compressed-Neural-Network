@@ -22,6 +22,7 @@ Based on the survey paper:
    - [Person 3 — Pruning](#person-3--pruning)
    - [Person 3 V2 — Dynamic Pruning on SimpleCNNv2 (Milestone 2)](#person-3-v2--dynamic-pruning-on-simplecnnv2-milestone-2)
    - [Person 4 — Quantization](#person-4--quantization)
+   - [Person 4 V2 — Quantization on Improved Architecture (Milestone 2)](#person-4-v2--quantization-on-improved-architecture-milestone-2)
 7. [Output and Logs](#output-and-logs)
 8. [Architecture Details](#architecture--simplecnn)
 9. [Compression Techniques](#compression-techniques)
@@ -42,7 +43,8 @@ Trains a CNN from scratch (no PyTorch, no TensorFlow — only NumPy) on the Frui
 | 2b | Person 2 (KT2) | `person2_train_v2.py` | Training + Quantization-Aware Training (QAT) |
 | 3 | Person 3 | `person3_pruning.py` | Weight pruning — removes 50% of weights (post-training) |
 | 3b | Person 3 (KT2) | `person3_dynamic_pruning.py` | Dynamic pruning during training on V2 model |
-| 4 | Person 4 | `person4_quantization.py` | Post-training quantization — FP32 → INT8 |
+| 4 | Person 4 | `person4_quantization.py` | Post-training quantization — FP32 → INT8 (V1 model) |
+| 4b | Person 4 (KT2) | `person4_quantization_v2.py` | Post-training quantization on V2 architecture |
 
 The full pipeline runs in one command via `main.py` and automatically saves a timestamped log to the `logs/` folder.
 
@@ -67,7 +69,8 @@ project-root/
 ├── person2_train_v2.py     ← Training + Quantization-Aware Training (Person 2, KT2)
 ├── person3_pruning.py            ← Weight pruning V1 — train→prune→fine-tune (Person 3)
 ├── person3_dynamic_pruning.py    ← Dynamic pruning during training on V2 (Person 3, KT2)
-├── person4_quantization.py       ← Quantization (Person 4)
+├── person4_quantization.py       ← Quantization V1 (Person 4)
+├── person4_quantization_v2.py    ← Quantization on V2 architecture (Person 4, KT2)
 ├── main.py                 ← Full pipeline — runs everything in order
 ├── logger.py               ← Shared logging utility (saves to logs/)
 ├── README.md               ← This file
@@ -845,6 +848,129 @@ Expected output:
 
 ---
 
+
+### Person 4 V2 — Quantization on Improved Architecture (Milestone 2)
+
+**File:** `person4_quantization_v2.py`  
+**Depends on:** `person1_model_v2.py` (V2 architecture), `person2_train.py`, a saved V2 model (e.g. `models/v2_pruned_final.npz` from Person 3 V2, or `models/v2_best.npz` from the V1 vs V2 comparison)  
+**What it does:** Same INT8 quantization math as the original `person4_quantization.py`, but works directly on the V2 (`SimpleCNNv2`) architecture instead of V1. Automatically loads BatchNorm parameters and switches the model to evaluation mode — both required for correct quantization of V2 models.
+
+#### How it differs from the original `person4_quantization.py`
+
+| Aspect | Original | V2 |
+|---|---|---|
+| Model architecture | `SimpleCNN` (V1) | `SimpleCNNv2` (V2) |
+| Loads BatchNorm params | No (V1 has no BN) | **Yes** — calls `model.load_bn_params(path)` |
+| Mode switch | Not needed | **Calls `model.eval()`** before quantization |
+| Math (S, Z, INT8 conversion) | Identical | Identical |
+| Output format | Identical | Identical |
+
+The quantization algorithm itself (Algorithm 1, Equations 1–5 from the reference paper) is exactly the same. The only differences are model loading and mode setup, both required because V2 has BatchNorm layers with running statistics that must be in inference mode for accurate forward passes.
+
+#### Critical: why `load_bn_params` and `eval()` are required
+
+BatchNorm layers in V2 have four hidden parameters per channel:
+- `gamma` (scale)
+- `beta` (shift)
+- `running_mean` (tracked during training)
+- `running_var` (tracked during training)
+
+During training, BN computes batch statistics from the current mini-batch. During inference, it must use the running mean/variance instead. If you forget either of these two lines:
+```python
+model.load_bn_params(model_path)   # loads the four BN parameters
+model.eval()                        # switches BN to use running stats
+```
+… the model will use default identity statistics (mean=0, var=1, gamma=1, beta=0), and accuracy will collapse to near-random (well under 1%).
+
+`person4_quantization_v2.py` does both automatically, so any V2-compatible saved model (V2 baseline, V2 pruned, V2 + anything) can be quantized with one command.
+
+#### How to test your part — quick technical sanity check
+
+You first need any V2 model saved. The easiest way is to grab one from a previous comparison or pruning run, or train one quickly:
+
+```bash
+python person1_model_v2.py     # smoke test — no dataset needed
+```
+
+Then quantize it (assuming the model is at `models/v2_best`):
+
+```bash
+python person4_quantization_v2.py --data_dir ./fruits-360-100x100 \
+                                     --model_path models/v2_best \
+                                     --max_per_class 30
+```
+
+#### Full quantization on a pruned V2 model (the KT2 final pipeline)
+
+This is the recommended use case — quantizing the model produced by `person3_dynamic_pruning.py`:
+
+```bash
+python person4_quantization_v2.py --data_dir ./fruits-360-100x100 \
+                                     --model_path models/v2_pruned_final \
+                                     --save_path models/v2_final_quantized \
+                                     --max_per_class 100 \
+                                     --strategy asymmetric
+```
+
+#### All options
+
+| Option | Default | What it does |
+|--------|---------|-------------|
+| `--data_dir` | `./fruits-360` | Path to dataset |
+| `--model_path` | `models/cnn_fruits` | V2 model to load (without .npz) |
+| `--save_path` | `models/cnn_quantized` | Where to save quantized model |
+| `--batch_size` | 32 | Batch size for accuracy evaluation |
+| `--max_per_class` | None | Limit images per class |
+| `--strategy` | `asymmetric` | `symmetric` or `asymmetric` quantization |
+| `--seed` | None | Random seed for reproducibility |
+
+#### Output files
+
+```
+models/
+└── v2_final_quantized.npz       ← V2 model with INT8-quantized weights (stored as FP32 dequant)
+
+logs/
+└── person4_TIMESTAMP.txt         ← quantization log with per-layer S, Z, error
+```
+
+#### Expected output
+
+```
+────────────────────────────────────────────────────
+  BASELINE (V2 model, pre-quantization)
+────────────────────────────────────────────────────
+  Accuracy : 76.53%
+  Size     : 4920.2 KB
+  Inference: 87.36 ms
+
+────────────────────────────────────────────────────
+  QUANTIZATION
+────────────────────────────────────────────────────
+[Quantization] Applying Algorithm 1 from the reference paper...
+  Strategy: ASYMMETRIC
+  Layer    Shape                    S          Z     Avg Error     INT8 Range
+  --------------------------------------------------------------------------
+  0   Conv  (8, 3, 3, 3)      0.010989     -6      0.002217    [-128, 127]
+  1   Conv  (16, 8, 3, 3)     0.007102     -5      0.001338    [-128, 127]
+  2   Conv  (32, 16, 3, 3)    0.006172    -32      0.000994    [-128, 127]
+  3   FC    (4608, 128)        0.003200     -1      0.000377    [-128, 127]
+  4   FC    (128, 261)         0.005082    -20      0.001071    [-128, 127]
+
+────────────────────────────────────────────────────
+  RESULTS
+────────────────────────────────────────────────────
+  Accuracy (%)                     76.53%       76.48%
+  Theoretical INT8 Size (KB)                    614.5
+  Theoretical Compression                          4x
+  Inference (ms)                    87.36        73.60
+  Accuracy Drop                                  0.05%
+  Speedup                                        1.19x
+```
+
+The 5 layers (vs 4 in V1) reflect V2's third convolutional block.
+
+---
 ## Output and Logs
 
 Every run saves a timestamped `.txt` log file to the `logs/` folder automatically:
