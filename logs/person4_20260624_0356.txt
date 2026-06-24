@@ -1,0 +1,61 @@
+============================================================
+  Project: CNN Model Compression
+  Person : person4
+  Date   : 2026-06-24 03:56:21
+  OS     : Linux (Python 3.14.6)
+  Log    : ./logs/person4_20260624_0356.txt
+============================================================
+
+[Model] Loading from 'models/test_pruned'...
+
+────────────────────────────────────────────────────────────
+  BASELINE
+────────────────────────────────────────────────────────────
+  Accuracy : 63.13%
+  Size     : 4920.2 KB
+  Inference: 89.70 ms
+
+────────────────────────────────────────────────────────────
+  QUANTIZATION
+────────────────────────────────────────────────────────────
+[Quantization] Applying Algorithm 1 from the survey paper...
+  Steps: min/max → S and Z → Q = R/S + Z → R = (Q-Z)*S
+
+────────────────────────────────────────────────────────────
+  RESULTS
+────────────────────────────────────────────────────────────
+  Accuracy : 63.16%
+  Size     : 2462.4 KB
+  Inference: 75.73 ms
+  ✓ Quantized model saved to 'models/test_final.npz'
+
+============================================================
+  COMPARISON: Original (FP32) vs Post-Training Quantization (INT8)
+============================================================
+Metric                               Original    Quantized
+------------------------------------------------------------
+Accuracy (%)                           63.13%       63.16%
+Saved Size (KB)                        4920.2       2462.4
+Theoretical FP32 Size (KB)             2457.8             
+Theoretical INT8 Size (KB)                           614.5
+Theoretical Compression                                 4x
+Inference (ms)                          89.70        75.73
+------------------------------------------------------------
+Accuracy Drop                          -0.03%
+Speedup                                 1.18x
+============================================================
+
+  NOTE: 'Saved Size' uses .npz (FP32 storage for both).
+  'Theoretical INT8 Size' shows what a real INT8 deployment
+  would save — a 4x reduction over FP32 storage.
+
+  Per-layer quantization error summary:
+    Layer 0: avg weight error = 0.001524, S=0.006925, Z=-21
+    Layer 1: avg weight error = 0.000833, S=0.004118, Z=-3
+    Layer 2: avg weight error = 0.000760, S=0.003738, Z=-23
+    Layer 3: avg weight error = 0.000243, S=0.002020, Z=-9
+    Layer 4: avg weight error = 0.000975, S=0.004444, Z=-10
+
+============================================================
+  Log complete: 2026-06-24 03:59:34
+============================================================

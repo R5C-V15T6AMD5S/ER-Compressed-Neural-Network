@@ -1,0 +1,66 @@
+============================================================
+  Project: CNN Model Compression
+  Person : person3_dynamic_pruning
+  Date   : 2026-06-24 03:26:57
+  OS     : Linux (Python 3.14.6)
+  Log    : ./logs/person3_dynamic_pruning_20260624_0326.txt
+============================================================
+
+
+────────────────────────────────────────────────────────────
+  DATA
+────────────────────────────────────────────────────────────
+Dataset path : ./fruits-360-100x100
+Classes      : 261
+Train images : 7816
+Test images  : 7776
+Limit        : max_per_class=30
+
+
+────────────────────────────────────────────────────────────
+  MODEL
+────────────────────────────────────────────────────────────
+Architecture : SimpleCNNv2 from person1_model_v2.py
+Parameters   : 629,765
+Optimizer    : SGD with momentum=0.9
+Loss         : cross-entropy
+Dropout      : p=0.3
+
+
+────────────────────────────────────────────────────────────
+  TRAINING
+────────────────────────────────────────────────────────────
+Epochs       : 5
+Batch size   : 32
+Learning rate: 0.01
+Train metric : running train accuracy from the same forward pass used for loss
+Pruning      : global, target sparsity=50.0%
+Schedule     : epoch 2 through 5
+Frequency    : every 10 batch(es)
+Evaluation   : full Test split
+
+Epoch [  1/5] Train Loss: 5.1679 | Train Accuracy: 2.66% | Test Accuracy: 7.57% | Sparsity: 0.00% | Samples: 7816
+Epoch [  2/5] Train Loss: 4.1254 | Train Accuracy: 11.44% | Test Accuracy: 27.73% | Sparsity: 28.99% | Samples: 7816
+  New best model saved (27.73%, epoch 2)
+Epoch [  3/5] Train Loss: 3.1773 | Train Accuracy: 25.00% | Test Accuracy: 41.14% | Sparsity: 43.60% | Samples: 7816
+  New best model saved (41.14%, epoch 3)
+Epoch [  4/5] Train Loss: 2.3741 | Train Accuracy: 40.72% | Test Accuracy: 55.66% | Sparsity: 49.23% | Samples: 7816
+  New best model saved (55.66%, epoch 4)
+Epoch [  5/5] Train Loss: 1.8306 | Train Accuracy: 52.60% | Test Accuracy: 64.08% | Sparsity: 50.00% | Samples: 7816
+  New best model saved (64.08%, epoch 5)
+
+────────────────────────────────────────────────────────────
+  RESULTS
+────────────────────────────────────────────────────────────
+Total steps        : 1225
+Seed               : 42
+Best test accuracy : 64.08%
+Best epoch         : 5
+Final sparsity     : 50.00%
+Model saved to     : models/test_pruned.npz
+BatchNorm saved to : models/test_pruned_bn.npz
+Masks saved to     : models/test_pruned_masks.npz
+
+============================================================
+  Log complete: 2026-06-24 03:56:21
+============================================================

@@ -1,0 +1,47 @@
+═══════════════════════════════════════════════════════════════════
+  KT2 PIPELINE SAŽETAK
+  2026-06-24 08:57
+═══════════════════════════════════════════════════════════════════
+
+Brzi test trajao: 32 min
+Pravi pruning trajao: 288 min
+Ukupno: 330 min
+
+─────────────────────────────────────────────────────────────────
+  FINALNI MODELI (u models/ folderu):
+─────────────────────────────────────────────────────────────────
+  v2_pruned_final.npz       ← V2 + Dynamic Pruning
+  v2_pruned_final_bn.npz    ← BatchNorm parametri
+  v2_pruned_masks_final.npz ← Pruning maske
+  v2_final_quantized.npz    ← V2 + Pruning + INT8 kvantizacija
+
+─────────────────────────────────────────────────────────────────
+  LOGOVI U FOLDERU results_kt2_20260624_0326:
+─────────────────────────────────────────────────────────────────
+  01_pruning_test.log         ← brzi test pruning
+  02_quantization_test.log    ← brzi test kvantizacija
+  03_pruning_full.log         ← pravi pruning
+  04_quantization_full.log    ← prava kvantizacija
+
+  Dodatno u logs/ folderu su točniji per-script timestamped logovi.
+
+─────────────────────────────────────────────────────────────────
+  REZULTATI iz pravog runa (zadnje epohe):
+─────────────────────────────────────────────────────────────────
+
+  Dynamic pruning (zadnji red iz 03_pruning_full.log):
+    Epoch [ 15/15] Train Loss: 0.1969 | Train Accuracy: 93.84% | Test Accuracy: 77.26% | Sparsity: 50.00% | Samples: 26016
+    Best test accuracy : 77.45%
+    Final sparsity     : 50.00%
+
+  Kvantizacija (iz 04_quantization_full.log):
+      Accuracy : 76.53%
+      Accuracy : 76.48%
+    Accuracy (%)                           76.53%       76.48%
+    Theoretical INT8 Size (KB)                           614.5
+    Theoretical Compression                                 4x
+    Accuracy Drop                           0.05%
+    Speedup                                 1.19x
+      'Theoretical INT8 Size' shows what a real INT8 deployment
+
+═══════════════════════════════════════════════════════════════════

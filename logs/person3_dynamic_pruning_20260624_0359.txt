@@ -1,0 +1,80 @@
+============================================================
+  Project: CNN Model Compression
+  Person : person3_dynamic_pruning
+  Date   : 2026-06-24 03:59:35
+  OS     : Linux (Python 3.14.6)
+  Log    : ./logs/person3_dynamic_pruning_20260624_0359.txt
+============================================================
+
+
+────────────────────────────────────────────────────────────
+  DATA
+────────────────────────────────────────────────────────────
+Dataset path : ./fruits-360-100x100
+Classes      : 261
+Train images : 26016
+Test images  : 25144
+Limit        : max_per_class=100
+
+
+────────────────────────────────────────────────────────────
+  MODEL
+────────────────────────────────────────────────────────────
+Architecture : SimpleCNNv2 from person1_model_v2.py
+Parameters   : 629,765
+Optimizer    : SGD with momentum=0.9
+Loss         : cross-entropy
+Dropout      : p=0.3
+
+
+────────────────────────────────────────────────────────────
+  TRAINING
+────────────────────────────────────────────────────────────
+Epochs       : 15
+Batch size   : 32
+Learning rate: 0.01
+Train metric : running train accuracy from the same forward pass used for loss
+Pruning      : global, target sparsity=50.0%
+Schedule     : epoch 2 through 15
+Frequency    : every 10 batch(es)
+Evaluation   : full Test split
+
+Epoch [  1/15] Train Loss: 5.0362 | Train Accuracy: 3.06% | Test Accuracy: 9.39% | Sparsity: 0.00% | Samples: 26016
+Epoch [  2/15] Train Loss: 3.3424 | Train Accuracy: 21.65% | Test Accuracy: 47.11% | Sparsity: 9.91% | Samples: 26016
+  New best model saved (47.11%, epoch 2)
+Epoch [  3/15] Train Loss: 1.9516 | Train Accuracy: 47.51% | Test Accuracy: 64.25% | Sparsity: 18.44% | Samples: 26016
+  New best model saved (64.25%, epoch 3)
+Epoch [  4/15] Train Loss: 1.2762 | Train Accuracy: 63.72% | Test Accuracy: 69.56% | Sparsity: 25.74% | Samples: 26016
+  New best model saved (69.56%, epoch 4)
+Epoch [  5/15] Train Loss: 0.9400 | Train Accuracy: 72.20% | Test Accuracy: 71.73% | Sparsity: 31.75% | Samples: 26016
+  New best model saved (71.73%, epoch 5)
+Epoch [  6/15] Train Loss: 0.7349 | Train Accuracy: 78.10% | Test Accuracy: 75.01% | Sparsity: 36.68% | Samples: 26016
+  New best model saved (75.01%, epoch 6)
+Epoch [  7/15] Train Loss: 0.6023 | Train Accuracy: 81.62% | Test Accuracy: 74.31% | Sparsity: 40.67% | Samples: 26016
+Epoch [  8/15] Train Loss: 0.5035 | Train Accuracy: 84.58% | Test Accuracy: 74.81% | Sparsity: 43.74% | Samples: 26016
+Epoch [  9/15] Train Loss: 0.4111 | Train Accuracy: 87.29% | Test Accuracy: 76.41% | Sparsity: 46.05% | Samples: 26016
+  New best model saved (76.41%, epoch 9)
+Epoch [ 10/15] Train Loss: 0.3601 | Train Accuracy: 88.95% | Test Accuracy: 75.89% | Sparsity: 47.72% | Samples: 26016
+Epoch [ 11/15] Train Loss: 0.3159 | Train Accuracy: 90.32% | Test Accuracy: 77.27% | Sparsity: 48.83% | Samples: 26016
+  New best model saved (77.27%, epoch 11)
+Epoch [ 12/15] Train Loss: 0.2715 | Train Accuracy: 91.47% | Test Accuracy: 76.81% | Sparsity: 49.50% | Samples: 26016
+Epoch [ 13/15] Train Loss: 0.2530 | Train Accuracy: 92.05% | Test Accuracy: 76.98% | Sparsity: 49.85% | Samples: 26016
+Epoch [ 14/15] Train Loss: 0.2253 | Train Accuracy: 92.82% | Test Accuracy: 77.45% | Sparsity: 49.98% | Samples: 26016
+  New best model saved (77.45%, epoch 14)
+Epoch [ 15/15] Train Loss: 0.1969 | Train Accuracy: 93.84% | Test Accuracy: 77.26% | Sparsity: 50.00% | Samples: 26016
+
+────────────────────────────────────────────────────────────
+  RESULTS
+────────────────────────────────────────────────────────────
+Total steps        : 12195
+Seed               : 42
+Best test accuracy : 77.45%
+Best epoch         : 14
+Final sparsity     : 50.00%
+Model saved to     : models/v2_pruned_final.npz
+BatchNorm saved to : models/v2_pruned_final_bn.npz
+Masks saved to     : models/v2_pruned_masks_final.npz
+
+============================================================
+  Log complete: 2026-06-24 08:47:57
+============================================================

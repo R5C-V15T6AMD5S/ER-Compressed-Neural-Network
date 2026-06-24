@@ -1,0 +1,93 @@
+┌──────────────────────────────────────────────────────────┐
+│  System : Linux                                          │
+│  Version: 7.0.12-arch1-1                                 │
+│  Python : 3.14.6                                         │
+│  Sep    : '/' (path separator on this OS)                │
+├──────────────────────────────────────────────────────────┤
+│  Linux detected — full UTF-8 support, no encoding issues.│
+│  To move an existing model file: mv cnn_fruits.npz       │
+│  models/                                                 │
+└──────────────────────────────────────────────────────────┘
+
+============================================================
+  Project: CNN Model Compression
+  Person : person4
+  Date   : 2026-06-24 08:47:57
+  OS     : Linux (Python 3.14.6)
+  Log    : ./logs/person4_20260624_0847.txt
+============================================================
+
+[Data] Scanning 'Test' split (261 classes)...
+  Found 25244 images.
+[Data] Loading 'Test' images into memory...
+  Loaded 25244 images. Shape: (25244, 3, 100, 100)
+[Model] Loading from 'models/v2_pruned_final'...
+  Model loaded from 'models/v2_pruned_final.npz'
+
+────────────────────────────────────────────────────────────
+  BASELINE
+────────────────────────────────────────────────────────────
+  Model saved to 'models/tmp_quant.npz'
+  Accuracy : 76.53%
+  Size     : 4920.2 KB
+  Inference: 87.36 ms
+
+────────────────────────────────────────────────────────────
+  QUANTIZATION
+────────────────────────────────────────────────────────────
+[Quantization] Applying Algorithm 1 from the survey paper...
+  Steps: min/max → S and Z → Q = R/S + Z → R = (Q-Z)*S
+
+  [Quantization] Quantizing layers FP32 → INT8 → FP32 (dequant)...
+  Strategy: ASYMMETRIC
+  Layer    Shape                           S      Z    Avg Error     INT8 Range
+  ----------------------------------------------------------------------------
+  0   Conv  (8, 3, 3, 3)             0.010989     -6     0.002217    [-128, 127]
+  1   Conv  (16, 8, 3, 3)            0.007102     -5     0.001338    [-128, 127]
+  2   Conv  (32, 16, 3, 3)           0.006172    -32     0.000994    [-128, 127]
+  3   FC    (4608, 128)              0.003200     -1     0.000377    [-128, 127]
+  4   FC    (128, 261)               0.005082    -20     0.001071    [-128, 127]
+
+
+────────────────────────────────────────────────────────────
+  RESULTS
+────────────────────────────────────────────────────────────
+  Model saved to 'models/tmp_quant.npz'
+  Accuracy : 76.48%
+  Size     : 2462.4 KB
+  Inference: 73.60 ms
+  Model saved to 'models/v2_final_quantized.npz'
+  ✓ Quantized model saved to 'models/v2_final_quantized.npz'
+
+============================================================
+  COMPARISON: Original (FP32) vs Post-Training Quantization (INT8)
+============================================================
+Metric                               Original    Quantized
+------------------------------------------------------------
+Accuracy (%)                           76.53%       76.48%
+Saved Size (KB)                        4920.2       2462.4
+Theoretical FP32 Size (KB)             2457.8             
+Theoretical INT8 Size (KB)                           614.5
+Theoretical Compression                                 4x
+Inference (ms)                          87.36        73.60
+------------------------------------------------------------
+Accuracy Drop                           0.05%
+Speedup                                 1.19x
+============================================================
+
+  NOTE: 'Saved Size' uses .npz (FP32 storage for both).
+  'Theoretical INT8 Size' shows what a real INT8 deployment
+  would save — a 4x reduction over FP32 storage.
+
+  Per-layer quantization error summary:
+    Layer 0: avg weight error = 0.002217, S=0.010989, Z=-6
+    Layer 1: avg weight error = 0.001338, S=0.007102, Z=-5
+    Layer 2: avg weight error = 0.000994, S=0.006172, Z=-32
+    Layer 3: avg weight error = 0.000377, S=0.003200, Z=-1
+    Layer 4: avg weight error = 0.001071, S=0.005082, Z=-20
+
+============================================================
+  Log complete: 2026-06-24 08:57:38
+============================================================
+
+  ✓ Log saved → ./logs/person4_20260624_0847.txt
