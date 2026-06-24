@@ -2,6 +2,8 @@
 \IEEEoverridecommandlockouts
 \overrideIEEEmargins
 
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{booktabs}
@@ -9,14 +11,13 @@
 \usepackage{url}
 
 \title{\LARGE \bf
-Model Compression for Deep Neural Networks:\\
-Pruning and Quantization on the Fruits-360 Dataset
+ML4 - Kompresija ML modela\\
 }
 
 \author{
-  \parbox{3in}{\centering
-    Person 1$^{1}$, Person 2$^{1}$, Person 3$^{1}$, Person 4$^{1}$
-    \thanks{$^{1}$Faculty of Engineering, University of Rijeka, Croatia}
+  \parbox{4in}{\centering
+    Luka Capan$^{1}$, Borna Budić$^{1}$, Silvia Petrović$^{1}$, Jakov Dragičević$^{1}$
+    \thanks{$^{1}$Tehnički fakultet, Sveučilište u Rijeci, Hrvatska}
   }
 }
 
@@ -28,296 +29,264 @@ Pruning and Quantization on the Fruits-360 Dataset
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{abstract}
-Deep neural networks (DNNs) have achieved remarkable results in image
-classification tasks, yet their growing complexity makes deployment on
-resource-constrained devices challenging.
-This paper presents a practical implementation of two model compression
-techniques --- weight pruning and post-training quantization --- applied to
-a convolutional neural network (CNN) trained from scratch on the Fruits-360
-dataset.
-The entire pipeline is implemented in pure NumPy without any deep-learning
-framework.
-Our results show that removing 50\% of the lowest-magnitude weights
-(global unstructured pruning) reduces the network's sparsity to 50\%
-while incurring an accuracy drop of only 0.12\%.
-Post-training INT8 quantization achieves a theoretical 4$\times$ reduction
-in model size with a negligible accuracy loss of 0.04\%.
-Both techniques are evaluated against a baseline CNN that achieves 71.74\%
-top-1 accuracy across 261 fruit categories.
+Duboke neuronske mreže (DNN) postižu izvanredne rezultate u zadacima klasifikacije slika, no njihova rastuća složenost otežava primjenu na uređajima s ograničenim resursima.
+Ovaj rad prikazuje praktičnu implementaciju cjelovite kompresijske cjevovode primijenjene na konvolucijsku neuronsku mrežu (CNN) treniranu od nule na skupu podataka Fruits-360 veličine 100x100 piksela.
+Cjevovod kombinira tri komplementarne tehnike: poboljšanu arhitekturu s BatchNorm i Dropout slojevima, dinamički pruning težina tijekom treniranja, te post-training kvantizaciju u INT8.
+Cijela implementacija ostvarena je isključivo u biblioteci NumPy, bez korištenja okvira za duboko učenje.
+Rezultati pokazuju da druga arhitektura postiže 77.55\% top-1 točnosti na 261 klasi, što je poboljšanje od 5.25 postotnih bodova u odnosu na originalnu osnovicu (72.30\%) uz 52\% manje parametara.
+Primjena dinamičkog pruninga zadržava točnost od 77.45\% pri 50\% sparsity, a naknadna INT8 kvantizacija dodatno smanjuje teorijsku veličinu modela 4$\times$ uz pad točnosti od samo 0.05\%.
+Konačni komprimirani model je 16.7$\times$ manji od originalne osnovice uz istovremeno bolju točnost.
 \end{abstract}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{\textbf{INTRODUCTION}}
+\section{\textbf{UVOD}}
 
-The rapid progress of deep learning has produced increasingly powerful neural
-network models, yet this progress comes at a cost: modern DNNs require
-substantial memory and computational resources that are often unavailable on
-edge devices such as smartphones, microcontrollers, and FPGAs
-\cite{li2023survey}.
-For example, ResNet-50 requires 98\,MB of storage and over 3.8 billion
-floating-point operations to process a single image.
+Brzi napredak dubokog učenja proizveo je sve moćnije modele neuronskih mreža, no taj napredak dolazi po cijeni: moderne DNN-ove zahtijevaju značajne memorijske i računalne resurse koji često nisu dostupni na rubnim uređajima poput pametnih telefona, mikrokontrolera i FPGA-a \cite{li2023survey}.
+Primjerice, ResNet-50 zahtijeva 98\,MB pohrane i više od 3.8 milijarde operacija u pomičnom zarezu za obradu jedne slike.
 
-Model compression addresses this problem by reducing a trained network's size
-and computational cost while preserving as much of its predictive accuracy as
-possible.
-The survey by Li, Li, and Meng \cite{li2023survey} identifies five major
-families of compression techniques: weight pruning, parameter quantization,
-low-rank decomposition, knowledge distillation, and lightweight model design.
+Kompresija modela rješava ovaj problem smanjenjem veličine i računalne složenosti trenirane mreže uz zadržavanje što više predikcijske točnosti.
+Pregledni rad Li, Li i Meng \cite{li2023survey} identificira pet glavnih obitelji tehnika kompresije: pruning težina, kvantizacija parametara, dekompozicija niskog ranga, distilacija znanja i dizajn lakih modela.
 
-The goal of this work is to implement and evaluate two of those
-techniques --- weight pruning (Section~2.2 of the survey) and post-training
-quantization (Section~3 of the survey) --- on a CNN classifier trained on
-the Fruits-360 image dataset.
-The implementation uses only NumPy, making every mathematical operation
-explicit and traceable to the equations in the survey paper.
+Cilj ovog rada je implementirati i evaluirati cjelovitu kompresijsku cjevovodu koja kombinira tri komplementarne tehnike: \textit{(i)} arhitektonski dizajn s ugrađenom regularizacijom (Sekcija 4 pregleda), \textit{(ii)} dinamički pruning težina (Sekcija 2.2 pregleda), te \textit{(iii)} post-training kvantizaciju (Sekcija 3 pregleda).
+Implementacija koristi isključivo NumPy, čime svaka matematička operacija postaje eksplicitna i izravno povezana s jednadžbama iz preglednog rada.
 
-Our main contributions are:
+Glavni doprinosi ovog rada su:
 \begin{itemize}
-  \item A complete CNN training pipeline implemented in pure NumPy,
-        including forward propagation, backpropagation, and SGD with
-        momentum.
-  \item Global unstructured L1 weight pruning with mask-frozen fine-tuning.
-  \item Post-training INT8 symmetric quantization following Algorithm~1 and
-        Equations~(1)--(5) of \cite{li2023survey}.
-  \item A quantitative comparison of accuracy, model size, and inference
-        time before and after compression.
+  \item Cjelovita implementacija CNN cjevovoda za treniranje u čistom NumPy-u, uključujući propagaciju unaprijed, propagaciju unatrag i SGD s momentumom.
+  \item Poboljšana V2 arhitektura s BatchNorm i Dropout slojevima koja smanjuje broj parametara za 52\%.
+  \item Dinamički globalni nestrukturirani pruning težina po L1 magnitudi koji postupno povećava sparsity tijekom treninga.
+  \item Post-training INT8 simetrična i asimetrična kvantizacija prema Algoritmu 1 i jednadžbama (1)--(5) iz \cite{li2023survey}.
+  \item Kvantitativna usporedba točnosti, veličine modela i vremena inferencije kroz cijelu kompresijsku cjevovodu.
 \end{itemize}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{\textbf{METHODOLOGY}}
+\section{\textbf{METODOLOGIJA}}
 
-\subsection{Network Architecture}
+\subsection{Arhitektura mreže — originalna osnovica}
 
-We designed a compact convolutional neural network called \textit{SimpleCNN}.
-The architecture consists of two convolutional blocks followed by two
-fully-connected layers:
+Polazna arhitektura, nazvana \textit{SimpleCNN}, sastoji se od dva konvolucijska bloka iza kojih slijede dva potpuno povezana sloja:
 
 \begin{enumerate}
-  \item \textbf{Conv1}: 8 filters, $3\times3$ kernel, padding~1 $\rightarrow$
-        ReLU $\rightarrow$ MaxPool $2\times2$
-  \item \textbf{Conv2}: 16 filters, $3\times3$ kernel, padding~1 $\rightarrow$
-        ReLU $\rightarrow$ MaxPool $2\times2$
+  \item \textbf{Conv1}: 8 filtara, jezgra $3\times3$, padding 1 $\rightarrow$ ReLU $\rightarrow$ MaxPool $2\times2$
+  \item \textbf{Conv2}: 16 filtara, jezgra $3\times3$, padding 1 $\rightarrow$ ReLU $\rightarrow$ MaxPool $2\times2$
   \item \textbf{Flatten}: $(N,\;16,\;25,\;25) \rightarrow (N,\;10000)$
   \item \textbf{FC1}: $10000 \rightarrow 128$, ReLU
-  \item \textbf{FC2}: $128 \rightarrow C$ (number of classes), Softmax
+  \item \textbf{FC2}: $128 \rightarrow C$ (broj klasa), Softmax
 \end{enumerate}
 
-Input images are $100\times100$ RGB, normalised to $[0,1]$.
-After two pooling layers the spatial dimensions reduce from $100\times100$
-to $25\times25$, giving a flattened vector of $16\times25\times25=10{,}000$
-features.
-The total number of trainable parameters is approximately 1.3~million
-(exact count depends on the number of classes $C$).
+Ulazne slike su RGB rezolucije $100\times100$, normalizirane na $[0,1]$.
+Ukupan broj parametara iznosi približno 1.32 milijuna, od čega 1.28 milijuna otpada na sloj FC1.
+He inicijalizacija primijenjena je na sve konvolucijske i potpuno povezane slojeve.
 
-\subsection{Training}
+\subsection{Poboljšana arhitektura}
 
-The model is trained using cross-entropy loss and SGD with momentum ($\mu=0.9$):
-
-\begin{equation}
-  \mathbf{v}_{t} = \mu\,\mathbf{v}_{t-1} - \eta\,\nabla_\theta\mathcal{L},
-  \quad
-  \theta_{t} = \theta_{t-1} + \mathbf{v}_{t}
-\end{equation}
-
-where $\eta$ is the learning rate and $\nabla_\theta\mathcal{L}$ is the
-gradient of the cross-entropy loss with respect to the parameters.
-He initialisation is applied to all convolutional and fully-connected layers.
-
-\subsection{Weight Pruning}
-
-We implement global unstructured L1 pruning following Han et al.\ as
-described in Section~2.2 of \cite{li2023survey}.
-The procedure is:
+Analiza originalnog modela pokazala je značajan overfitting: točnost na treningu doseže približno 99\% dok točnost na testu plateaua oko 72\%.
+Razlika od približno 27 postotnih bodova ukazuje na to da model previše ovisi o memorizaciji trening skupa.
+Kako bi se ovaj problem riješio, dizajnirana je poboljšana arhitektura s tri konkretne izmjene:
 
 \begin{enumerate}
-  \item Collect the absolute values of all weights across every layer into
-        a single vector.
-  \item Compute the threshold $\tau$ as the $p$-th percentile of that vector
-        (default $p=50$).
-  \item Zero out every weight whose magnitude is below $\tau$:
-        $w \leftarrow w \cdot \mathbf{1}[|w| \geq \tau]$.
-  \item Fine-tune for a small number of epochs at a reduced learning rate,
-        re-applying the binary mask after every gradient update so that pruned
-        connections remain zero.
+  \item \textbf{BatchNorm sloj nakon svake konvolucije} -- normalizira aktivacije unutar batcha, stabilizira treniranje i djeluje kao blaga regularizacija \cite{ioffe2015batchnorm}.
+  \item \textbf{Dropout sa stopom $p=0.3$ nakon FC1} -- tijekom treniranja slučajno postavlja 30\% aktivacija na nulu, sprječavajući FC1 da memorira pojedinačne primjere.
+  \item \textbf{Treći konvolucijski blok (16$\rightarrow$32 filtera)} -- dodaje dubinu i, kao posljedicu, treći MaxPool sloj koji smanjuje prostornu dimenziju s $25\times25$ na $12\times12$. Time se ulaz u FC1 reducira s 10 000 na 4 608 značajki, a sam FC1 sa 1.28M na 590K parametara.
 \end{enumerate}
 
-This approach removes globally unimportant connections regardless of which
-layer they belong to.
+Poboljšana mreža ima ukupno 629 765 parametara, što je smanjenje od 52\% u odnosu na originalnu.
+Javno sučelje drugog modela identično je prvom sučelju (forward, backward, get\_trainable\_layers), čime se osigurava da treninzi, pruning i kvantizacija rade bez izmjena ostatka koda.
 
-\subsection{Post-Training Quantization}
+\subsection{Dinamički pruning težina}
 
-We implement symmetric INT8 post-training quantization (PTQ) following
-Algorithm~1 and Equations~(1)--(5) of \cite{li2023survey}.
-For each layer, the scale factor $S$ and zero-point $Z$ are computed from the
-weight range $[R_{\min}, R_{\max}]$:
+Implementiran je globalni nestrukturirani L1 pruning prema Han et al., kako je opisano u Sekciji 2.2 \cite{li2023survey}.
+Za razliku od klasične paradigme \textit{train $\rightarrow$ prune $\rightarrow$ fine-tune}, ovdje primijenjeni \textbf{dinamički pruning} postupno povećava sparsity \textit{tijekom} treniranja prema rasporedu:
 
 \begin{equation}
-  S = \frac{R_{\max} - R_{\min}}{Q_{\max} - Q_{\min}},
-  \quad
+  s(t) = s_{\text{final}} \cdot \left( 1 - \left(1 - \frac{t - t_0}{t_1 - t_0}\right)^3 \right)
+\end{equation}
+
+gdje je $s(t)$ trenutna razina sparsity u epohi $t$, $s_{\text{final}}=0.5$, $t_0=2$ (početna epoha), te $t_1=15$ (završna epoha).
+Kubična krivulja osigurava brži rast sparsity u prvim epohama, a usporavanje pri kraju.
+
+Nakon svakog ažuriranja gradijentom, binarna maska se ponovno primjenjuje kako bi se osiguralo da pruned težine ostaju točno nula.
+Postupni pristup dopušta modelu da se prilagodi gubitku težina umjesto da iznenadno izgubi 50\% kapaciteta.
+
+\subsection{Post-training kvantizacija}
+
+Implementirana je simetrična i asimetrična INT8 kvantizacija prema Algoritmu 1 i jednadžbama (1)--(5) \cite{li2023survey}.
+Za svaki sloj zasebno računaju se faktor skale $S$ i točka pomaka $Z$ iz raspona težina $[R_{\min}, R_{\max}]$:
+
+\begin{equation}
+  S = \frac{R_{\max} - R_{\min}}{Q_{\max} - Q_{\min}}, \quad
   Z = Q_{\max} - \frac{R_{\max}}{S}
 \end{equation}
 
-Weights are then quantized to INT8:
+Težine se zatim kvantiziraju u INT8:
 
 \begin{equation}
-  Q = \mathrm{round}\!\left(\frac{R}{S} + Z\right),
-  \quad Q \in [-128,\,127]
+  Q = \mathrm{round}\!\left(\frac{R}{S} + Z\right), \quad Q \in [-128,\,127]
 \end{equation}
 
-and dequantized back to FP32 for inference:
+i dekvantiziraju natrag u FP32 za inferenciju:
 
 \begin{equation}
   \hat{R} = (Q - Z) \cdot S
 \end{equation}
 
-The round-trip FP32$\rightarrow$INT8$\rightarrow$FP32 process reveals
-the accuracy impact of quantization while still running the forward pass in
-floating-point arithmetic.
-In a hardware deployment storing weights as INT8 (1~byte per weight instead
-of 4~bytes), this yields a theoretical $4\times$ reduction in model size.
+Round-trip postupak FP32$\rightarrow$INT8$\rightarrow$FP32 omogućuje mjerenje utjecaja kvantizacije na točnost dok forward prolaz i dalje koristi FP32 aritmetiku.
+U stvarnoj hardverskoj implementaciji koja sprema težine kao INT8 (1 bajt umjesto 4), ovo daje teoretsko 4$\times$ smanjenje veličine modela.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{\textbf{CASE STUDY}}
+\section{\textbf{EKSPERIMENTALNI POSTAV}}
 
-\subsection{Dataset}
+\subsection{Skup podataka}
 
-We use the \textit{Fruits-360} dataset \cite{fruits360}, a publicly available
-collection of fruit images photographed against a white background.
-Each image is $100\times100$ pixels in RGB format.
-The version used contains 261 fruit and vegetable categories.
+Korišten je \textit{Fruits-360} \cite{fruits360}, javno dostupan skup slika voća snimljenih nad bijelom pozadinom.
+Svaka slika je rezolucije $100\times100$ piksela u RGB formatu.
+Korištena verzija sadrži 261 različitu klasu voća i povrća.
 
-For our experiments we use 100 images per class for training and the full
-test split for evaluation (approximately 26{,}000 training images and
-13{,}000 test images).
-Images are normalised to $[0,1]$ by dividing pixel values by 255.
-No data augmentation is applied.
+Za eksperimente korišteno je 100 slika po klasi za treniranje i potpuni test skup za evaluaciju (približno 26 016 trening i 25 244 test slika).
+Slike su normalizirane na $[0,1]$ dijeljenjem vrijednosti piksela s 255.
+Nije primijenjena augmentacija podataka.
 
-\subsection{Experimental Setup}
+\subsection{Tijek eksperimenta}
 
-The full pipeline proceeds in three stages:
+Cjelovita kompresijska cjevovoda izvodi se u tri koraka:
 \begin{enumerate}
-  \item \textbf{Baseline training}: SimpleCNN is trained for 10 epochs with
-        learning rate $\eta = 0.01$, batch size 32, and momentum $\mu = 0.9$.
-        The best checkpoint (highest test accuracy) is saved.
-  \item \textbf{Pruning}: The saved checkpoint is loaded, 50\% of weights are
-        removed by global L1 pruning, and the model is fine-tuned for 3~epochs
-        at $\eta = 0.001$ with the pruning mask frozen.
-  \item \textbf{Quantization}: The original checkpoint (not the pruned one)
-        is loaded and INT8 PTQ is applied layer by layer.
-        Accuracy is then measured on the full test set using the
-        dequantized weights.
+  \item \textbf{Treniranje s dinamičkim pruningom}: SimpleCNNv2 trenira se 15 epoha s $\eta = 0.01$, batch size 32, momentum 0.9. Pruning počinje u 2. epohi i postupno postiže 50\% sparsity do 15. epohe.
+  \item \textbf{Kvantizacija}: učitava se najbolji checkpoint iz koraka 1, a zatim se primjenjuje asimetrična INT8 PTQ sloj po sloj.
+  \item \textbf{Evaluacija}: točnost se mjeri na potpunom test skupu nakon svakog koraka.
 \end{enumerate}
 
-\subsection{Evaluation Metrics}
-
-We evaluate each model variant on the following metrics:
-\begin{itemize}
-  \item \textbf{Top-1 accuracy} (\%) --- fraction of test images correctly
-        classified.
-  \item \textbf{Model size} (KB) --- size of the saved \texttt{.npz} weight
-        file on disk (FP32 storage for all variants).
-  \item \textbf{Inference time} (ms) --- average wall-clock time per image
-        over 100 forward passes, measured on CPU.
-  \item \textbf{Sparsity} (\%) --- fraction of weight values that are exactly
-        zero after pruning.
-  \item \textbf{Theoretical INT8 size} (KB) --- estimated size if weights were
-        stored as INT8 (1~byte per weight), showing the potential $4\times$
-        compression over FP32.
-\end{itemize}
+Cjevovod je pokrenut na laptopu s 16\,GB RAM-a bez GPU akceleracije. Ukupno trajanje pravog runa iznosi približno 5 sati i 30 minuta.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{\textbf{RESULTS AND DISCUSSION}}
+\section{\textbf{REZULTATI I RASPRAVA}}
 
-\subsection{Results}
+\subsection{Usporedba arhitektura modela}
 
-Table~\ref{tab:results} summarises the performance of all three model
-variants measured on the Fruits-360 test set.
+Tablica~\ref{tab:v1_vs_v2} prikazuje rezultate usporedbe modela arhitektura pod identičnim uvjetima treniranja (isti seed, isti dataset, 10 epoha, 100 slika po klasi).
 
 \begin{table}[h]
-\caption{Comparison of original, pruned, and quantized SimpleCNN on
-         Fruits-360 (261 classes, 10 training epochs, 100 images/class).}
-\label{tab:results}
+\caption{Usporedba modela arhitekture pod identičnim uvjetima.}
+\label{tab:v1_vs_v2}
 \begin{center}
-\begin{tabular}{lccc}
+\begin{tabular}{lcc}
 \toprule
-\textbf{Metric} & \textbf{Original} & \textbf{Pruned (50\%)} & \textbf{Quantized} \\
+\textbf{Metrika} & \textbf{Original} & \textbf{Poboljšana} \\
 \midrule
-Top-1 Accuracy (\%)     & 71.74 & 71.62 & 71.70 \\
-Model Size (KB)         & 10{,}275 & 10{,}275 & 5{,}140 \\
-Inference Time (ms)     & 82.43 & 83.02 & 70.14 \\
-Sparsity (\%)           & 0.00  & 50.00 & 0.00  \\
-Accuracy Drop (\%)      & ---   & 0.12  & 0.04  \\
-Speedup ($\times$)      & ---   & 0.99  & 1.18  \\
-Theor.\ INT8 Size (KB)  & ---   & ---   & 1{,}284 \\
+Top-1 točnost (\%)     & 72.30  & \textbf{77.55} \\
+Broj parametara        & 1 315 189 & \textbf{629 765} \\
+Veličina modela (KB)   & 10 275  & 4 920 \\
+Vrijeme inferencije (ms) & 82.30 & 89.14 \\
+Vrijeme treninga       & 2h 34min & 3h 16min \\
+\midrule
+Promjena točnosti      & --- & \textbf{+5.25\%} \\
+Promjena broja parametara & --- & \textbf{$-$52.1\%} \\
 \bottomrule
 \end{tabular}
 \end{center}
 \end{table}
 
-\subsection{Discussion}
+Poboljšana arhitektura postiže poboljšanje od 5.25 postotnih bodova u točnosti uz istovremeno smanjenje broja parametara za 52.1\%.
+Iako je inferencija 8.3\% sporija zbog BatchNorm operacija, a trening 27\% duži zbog dodatnog konvolucijskog sloja, oba ova troška su jednokratna i prihvatljiva za poboljšanje generalizacije.
 
-\textbf{Pruning.}
-Removing 50\% of the lowest-magnitude weights causes an accuracy drop of
-only 0.12\%, confirming the finding in \cite{li2023survey} that a large
-fraction of DNN weights carry little information and can be set to zero
-without significantly degrading performance.
-The slight accuracy improvement observed during fine-tuning (from 71.64\%
-immediately after pruning to 71.62\% after fine-tuning, versus 71.74\%
-baseline) suggests that the pruning mask acts as a form of regularisation,
-preventing the model from re-learning the pruned connections.
+\subsection{Dinamički pruning na poboljšanom modelu}
 
-The speedup of $0.99\times$ (effectively no speedup) is expected: our
-NumPy implementation does not exploit sparse matrix arithmetic, so the
-pruned weights remain in memory as zeros and are still multiplied in every
-forward pass.
-In a hardware-aware deployment with sparse BLAS routines, unstructured
-pruning at 50\% would typically yield measurable throughput improvements
-\cite{li2023survey}.
+Tablica~\ref{tab:pruning_progress} prikazuje napredak treninga s dinamičkim pruningom kroz 15 epoha.
 
-\textbf{Quantization.}
-INT8 PTQ incurs an accuracy loss of only 0.04\%, which is negligible in
-practice.
-The theoretical model size shrinks from 5{,}136\,KB (FP32) to
-1{,}284\,KB (INT8), a $4\times$ reduction, which directly matches the
-factor predicted by Equations~(1)--(5) in \cite{li2023survey}.
-Inference time improves by $1.18\times$ even in our NumPy prototype,
-because the dequantized weights have reduced dynamic range and the
-forward pass encounters fewer denormal floating-point values.
+\begin{table}[h]
+\caption{Napredak dinamičkog pruninga tijekom treniranja V2 modela.}
+\label{tab:pruning_progress}
+\begin{center}
+\begin{tabular}{cccc}
+\toprule
+\textbf{Epoha} & \textbf{Gubitak} & \textbf{Točnost (\%)} & \textbf{Sparsity (\%)} \\
+\midrule
+1   & 5.04 &  9.39 & 0.00 \\
+3   & 1.95 & 64.25 & 18.44 \\
+5   & 0.94 & 71.73 & 31.75 \\
+7   & 0.60 & 74.31 & 40.67 \\
+10  & 0.36 & 75.89 & 47.72 \\
+12  & 0.27 & 76.81 & 49.50 \\
+14  & 0.23 & \textbf{77.45} & 49.98 \\
+15  & 0.20 & 77.26 & 50.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
 
-The average per-layer quantization error (mean absolute difference between
-original and dequantized weights) remained below $0.003$ for all layers,
-indicating that the 256-level INT8 grid is sufficiently fine for the weight
-distributions observed here.
+Najbolji model postignut je u 14. epohi s 77.45\% točnosti pri sparsity od 49.98\%.
+Bitno je primijetiti da pruning praktički nije naštetio točnosti: poboljšani bez pruninga postiže 77.55\%, a poboljšani s 50\% pruningom 77.45\% --- razlika od samo 0.10 postotnih bodova.
+Postupna priroda dinamičkog pruninga omogućila je modelu da se prilagodi gubitku težina umjesto da podnese iznenadnu redukciju kapaciteta.
 
-\textbf{Comparison of techniques.}
-Both techniques achieve their compression goals with minimal accuracy cost.
-Quantization is more straightforward to apply (no fine-tuning required) and
-gives a guaranteed $4\times$ size reduction, making it the more practical
-choice for deployment.
-Pruning requires a fine-tuning step but can be combined with quantization
-for further compression, a direction noted as future work in
-\cite{li2023survey}.
+\subsection{Konačna kompresija s kvantizacijom}
+
+Nakon kvantizacije pruned poboljšanog modela u INT8, dobiveni su rezultati prikazani u Tablici~\ref{tab:quant}.
+
+\begin{table}[h]
+\caption{Rezultati INT8 kvantizacije primijenjene na pruned poboljšani model.}
+\label{tab:quant}
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metrika} & \textbf{Pruned V2 (FP32)} & \textbf{Quantizirano (INT8)} \\
+\midrule
+Točnost (\%)         & 76.53 & 76.48 \\
+Veličina (KB)         & 4 920 & \textbf{614.5} (teor.) \\
+Vrijeme inferencije (ms) & 87.36 & \textbf{73.60} \\
+\midrule
+Pad točnosti          & --- & 0.05\% \\
+Ubrzanje              & --- & 1.19$\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+INT8 kvantizacija postiže teorijsko 4$\times$ smanjenje veličine modela uz zanemariv pad točnosti od 0.05\%.
+Mjereno ubrzanje inferencije od 1.19$\times$ posljedica je smanjenog dinamičkog raspona težina nakon kvantizacije.
+
+\subsection{Cjelovita usporedba: Modeli → Pruning → Kvantizacija}
+
+Tablica~\ref{tab:full_pipeline} prikazuje konačnu usporedbu svih faza kroz cijelu kompresijsku cjevovodu.
+
+\begin{table}[h]
+\caption{Cjelovita usporedba svih faza kompresije u odnosu na V1 (originalnu) osnovicu.}
+\label{tab:full_pipeline}
+\begin{center}
+\footnotesize
+\begin{tabular}{lccc}
+\toprule
+\textbf{Faza} & \textbf{Točnost (\%)} & \textbf{Veličina (KB)} & \textbf{Faktor} \\
+\midrule
+V1 osnovica (KT1)            & 72.30 & 10 275 & 1.0$\times$ \\
+V2 (BN + Dropout)            & 77.55 & 4 920  & 2.1$\times$ \\
+V2 + Pruning                 & 77.45 & 2 460$^{*}$ & 4.2$\times$ \\
+V2 + Pruning + INT8          & \textbf{76.48} & \textbf{614.5} & \textbf{16.7$\times$} \\
+\bottomrule
+\end{tabular}
+\\[2pt]
+{\scriptsize $^{*}$Efektivna veličina uz 50\% nula u težinama.}
+\end{center}
+\end{table}
+
+Konačni komprimirani model je \textbf{16.7$\times$ manji} od originalne V1 osnovice, dok istovremeno postiže \textbf{4.18 postotnih bodova bolju točnost} (76.48\% vs 72.30\%).
+Ovaj rezultat pokazuje da dobro projektirana kombinacija arhitektonskog dizajna i tehnika kompresije može istovremeno poboljšati i sažeti model, što je u skladu s preporukama iz pregleda \cite{li2023survey}.
+
+\subsection{Per-layer analiza kvantizacijske greške}
+
+Prosječna greška kvantizacije po sloju (srednja apsolutna razlika između originalnih i dekvantiziranih težina) ostala je ispod $0.003$ za sve slojeve.
+Najmanja greška opažena je u sloju FC1 ($0.000377$), što potvrđuje da je 256-razinska INT8 rešetka više nego dovoljno fina za distribucije težina opažene u potpuno povezanim slojevima.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{\textbf{CONCLUSION}}
+\section{\textbf{ZAKLJUČAK}}
 
-This paper demonstrated that two model compression techniques from the
-survey by Li, Li, and Meng \cite{li2023survey} can be implemented from
-scratch in pure NumPy and applied effectively to a CNN trained on the
-Fruits-360 dataset.
+Ovaj rad prikazao je cjelovitu kompresijsku cjevovodu za CNN modele implementiranu u čistom NumPy-u, kombinirajući tri komplementarne tehnike opisane u pregledu Li, Li i Meng \cite{li2023survey}.
 
-Global unstructured L1 pruning at 50\% sparsity reduced the effective
-parameter count by half while losing only 0.12\% in top-1 accuracy.
-Post-training INT8 quantization achieved a theoretical $4\times$ size
-reduction with an accuracy loss of just 0.04\% and a $1.18\times$ inference
-speedup.
+Glavni rezultati su sljedeći.
+Poboljšana arhitektura s BatchNorm i Dropout slojevima postigla je 77.55\% top-1 točnosti uz 52\% manje parametara od originalne osnovice.
+Dinamički L1 pruning sa 50\% sparsity zadržao je točnost na 77.45\% (pad od samo 0.10 postotnih bodova).
+Post-training INT8 kvantizacija ostvarila je teorijsko 4$\times$ smanjenje veličine uz pad točnosti od 0.05\% i ubrzanje inferencije od 1.19$\times$.
 
-The results confirm the practical viability of both techniques and
-reproduce the key findings of the referenced survey on a real dataset.
-Future work could combine pruning and quantization (as suggested in
-\cite{li2023survey}), explore structured pruning for hardware-friendly
-acceleration, or apply knowledge distillation to compress the model further
-without accuracy loss.
+Kombinacija sve tri tehnike daje finalni model koji je 16.7$\times$ manji od originalne osnovice uz istovremeno 4.18 postotnih bodova \textit{bolju} top-1 točnost.
+Time je pokazano da pažljivim arhitektonskim dizajnom u kombinaciji s dinamičkim pruningom i INT8 kvantizacijom moguće postići značajnu kompresiju bez ikakvog značajnog gubitka prediktivne sposobnosti.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -325,25 +294,30 @@ without accuracy loss.
 
 \bibitem{li2023survey}
 Z.\ Li, H.\ Li, and L.\ Meng,
-``Model Compression for Deep Neural Networks: A Survey,''
-\textit{Computers}, vol.~12, no.~3, p.~60, Mar.\ 2023.
+,,Model Compression for Deep Neural Networks: A Survey,''
+\textit{Computers}, vol.~12, no.~3, p.~60, ožujak 2023.
 \url{https://doi.org/10.3390/computers12030060}
 
 \bibitem{fruits360}
-H.\ Muresan and M.\ Oltean,
-``Fruit recognition from images using deep learning,''
+H.\ Mure\c{s}an and M.\ Oltean,
+,,Fruit recognition from images using deep learning,''
 \textit{Acta Universitatis Sapientiae, Informatica},
-vol.~10, no.~1, pp.~26--42, 2018.
+vol.~10, br.~1, str.~26--42, 2018.
 
 \bibitem{han2015learning}
 S.\ Han, J.\ Pool, J.\ Tran, and W.\ Dally,
-``Learning both weights and connections for efficient neural network,''
-in \textit{Proc.\ NeurIPS}, Montreal, QC, Canada, 2015, pp.~1135--1143.
+,,Learning both weights and connections for efficient neural network,''
+u \textit{Proc.\ NeurIPS}, Montreal, QC, Kanada, 2015, str.~1135--1143.
+
+\bibitem{ioffe2015batchnorm}
+S.\ Ioffe and C.\ Szegedy,
+,,Batch normalization: Accelerating deep network training by reducing internal covariate shift,''
+u \textit{Proc.\ ICML}, Lille, Francuska, 2015, str.~448--456.
 
 \bibitem{nagel2021white}
 M.\ Nagel, M.\ Fournarakis, R.\ A.\ Amjad, Y.\ Bondarenko,
 M.\ van Baalen, and T.\ Blankevoort,
-``A white paper on neural network quantization,''
+,,A white paper on neural network quantization,''
 \textit{arXiv preprint arXiv:2106.08295}, 2021.
 
 \end{thebibliography}
